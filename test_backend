@@ -1,0 +1,38 @@
+"""Offline test: builds a tiny database by hand and checks the answers."""
+import json, sqlite3, os
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import ingest
+ingest.DB = "test.db"
+import server
+server.DB = "test.db"
+from rules import Rule, move_by
+
+tz = ZoneInfo("America/Los_Angeles")
+def at(s): return datetime.fromisoformat(s).replace(tzinfo=tz)
+
+# 2-hour meter 8am-6pm every day, sweeping Wednesday 10am-12pm
+rules = [Rule("limit", list(range(7)), 480, 1080, "2-hour meter", 120),
+         Rule("no", [2], 600, 720, "Street sweeping")]
+assert move_by(rules, at("2026-10-23T14:00"))["move_by"].startswith("2026-10-23T16:00")   # Fri 2pm -> 4pm
+r = move_by(rules, at("2026-10-23T17:00"))                                                  # Fri 5pm -> 6pm meter ends, limit 7pm? no: free after 6pm
+assert r["move_by"].startswith("2026-10-28T10:00"), r   # meter ends at 6pm, so next deadline is Wednesday sweeping
+assert move_by(rules, at("2026-10-21T10:30"))["status"] == "no"                              # Wed sweeping
+r = move_by(rules, at("2026-10-20T20:00"))                                                   # Tue 8pm free, sweeping next day 10am
+assert r["move_by"].startswith("2026-10-21T10:00"), r
+# end-to-end through sqlite
+if os.path.exists("test.db"): os.remove("test.db")
+db = sqlite3.connect("test.db")
+db.executescript("CREATE TABLE meters(id,lat,lng,address,rules); CREATE TABLE sweep(id,props,geom,minlat,maxlat,minlng,maxlng);")
+db.execute("INSERT INTO meters VALUES('1',34.1016,-118.3387,'HOLLYWOOD BLVD',?)",
+           (json.dumps([{"kind":"limit","days":list(range(7)),"start":480,"end":1080,"label":"2-hour meter","limit_min":120,"source":"t","confidence":"high"}]),))
+db.execute("CREATE TABLE ppd(props,geom,minlat,maxlat,minlng,maxlng)")
+db.execute("INSERT INTO ppd VALUES('{}',?,34.0,34.2,-118.4,-118.3)",(json.dumps({"type":"Polygon","coordinates":[[[-118.4,34.0],[-118.3,34.0],[-118.3,34.2],[-118.4,34.2],[-118.4,34.0]]]}),))
+db.commit()
+rs, addr, conf, warns = server.lookup(34.1016, -118.3387, at("2026-10-23T14:00"))
+assert len(warns) == 1
+assert addr == "HOLLYWOOD BLVD" and conf == "high" and len(rs) == 1
+assert ingest.parse_limit("2HR") == 120 and ingest.parse_limit("30 MIN") == 30
+assert ingest.parse_hours("8AM-6PM") == (480, 1080), ingest.parse_hours("8AM-6PM")
+os.remove("test.db")
+print("all tests passed")
