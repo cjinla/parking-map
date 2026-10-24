@@ -20,16 +20,22 @@ def get(url):
 
 SWEEP_BASE = "https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/ArcGIS/rest/services/Biweekly_Routes_2021/FeatureServer"
 
+def esri_to_geo(f):
+    """This service only speaks Esri JSON (rings), so convert it to a GeoJSON-style feature."""
+    rings = (f.get("geometry") or {}).get("rings")
+    geom = {"type": "MultiPolygon", "coordinates": [[r] for r in rings]} if rings else None
+    return {"properties": f.get("attributes") or {}, "geometry": geom}
+
 def sweep_features():
     """Try the first few layers and page through results. Never crashes the build."""
     for layer in (0, 1, 2):
         feats, offset, seen = [], 0, set()
         try:
             while True:
-                data = get(f"{SWEEP_BASE}/{layer}/query?where=1%3D1&outFields=*&outSR=4326&f=geojson"
+                data = get(f"{SWEEP_BASE}/{layer}/query?where=1%3D1&outFields=*&outSR=4326&f=json"
                            f"&resultOffset={offset}&resultRecordCount=1000")
                 if "error" in data: raise RuntimeError(str(data["error"])[:200])
-                page = data.get("features", [])
+                page = [esri_to_geo(f) for f in data.get("features", [])]
                 keys = {json.dumps(f.get("properties"), sort_keys=True) for f in page}
                 if not page or keys <= seen: break          # server repeated itself: stop
                 seen |= keys
