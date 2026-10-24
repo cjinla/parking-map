@@ -23,15 +23,19 @@ SWEEP_BASE = "https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/ArcGIS/rest/services
 def sweep_features():
     """Try the first few layers and page through results. Never crashes the build."""
     for layer in (0, 1, 2):
-        feats, offset = [], 0
+        feats, offset, seen = [], 0, set()
         try:
             while True:
                 data = get(f"{SWEEP_BASE}/{layer}/query?where=1%3D1&outFields=*&outSR=4326&f=geojson"
                            f"&resultOffset={offset}&resultRecordCount=1000")
                 if "error" in data: raise RuntimeError(str(data["error"])[:200])
                 page = data.get("features", [])
+                keys = {json.dumps(f.get("properties"), sort_keys=True) for f in page}
+                if not page or keys <= seen: break          # server repeated itself: stop
+                seen |= keys
                 feats += page
-                if len(page) < 1000: break
+                print(f"Sweeping layer {layer}: {len(feats)} routes so far", flush=True)
+                if len(page) < 1000 or offset >= 40000: break
                 offset += 1000
             if feats: return feats
         except Exception as e:
@@ -78,6 +82,7 @@ def meter_rules(rec):
     return rules
 
 def load():
+    print("Downloading meters...", flush=True)
     db = sqlite3.connect(DB)
     db.executescript("""DROP TABLE IF EXISTS meters; DROP TABLE IF EXISTS sweep;
       CREATE TABLE meters(id TEXT, lat REAL, lng REAL, address TEXT, rules TEXT);
