@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: la-parking
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && python ingest.py
+    startCommand: python server.py
