@@ -2,7 +2,7 @@
 Run:  python ingest.py        (needs internet; re-run nightly)
 Field names in the city's datasets change, so every parser below is tolerant
 and anything it cannot read becomes a low-confidence rule instead of a crash."""
-import json, re, sqlite3, urllib.request
+import json, re, sqlite3, urllib.error, urllib.request
 DB = "parking.db"
 METERS = "https://data.lacity.org/resource/s49e-q6j2.json?$limit=50000"
 SWEEP = ("https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/ArcGIS/rest/services/"
@@ -11,8 +11,33 @@ PPD = "https://data.lacity.org/resource/s3st-6nwi.geojson?$limit=5000"
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 def get(url):
-    with urllib.request.urlopen(url, timeout=120) as f:
-        return json.load(f)
+    req = urllib.request.Request(url, headers={"User-Agent": "la-parking-app/1.0", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as f:
+            return json.load(f)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code} for {url[:100]}: {e.read()[:200]!r}")
+
+SWEEP_BASE = "https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/ArcGIS/rest/services/Biweekly_Routes_2021/FeatureServer"
+
+def sweep_features():
+    """Try the first few layers and page through results. Never crashes the build."""
+    for layer in (0, 1, 2):
+        feats, offset = [], 0
+        try:
+            while True:
+                data = get(f"{SWEEP_BASE}/{layer}/query?where=1%3D1&outFields=*&outSR=4326&f=geojson"
+                           f"&resultOffset={offset}&resultRecordCount=1000")
+                if "error" in data: raise RuntimeError(str(data["error"])[:200])
+                page = data.get("features", [])
+                feats += page
+                if len(page) < 1000: break
+                offset += 1000
+            if feats: return feats
+        except Exception as e:
+            print(f"Warning: sweeping layer {layer} failed: {e}")
+    print("Warning: no sweeping data loaded")
+    return []
 
 def latlng(rec):
     v = rec.get("latlng") or rec.get("location") or {}
@@ -66,8 +91,9 @@ def load():
                        (rec.get("spaceid"), p[0], p[1], rec.get("blockface") or "", json.dumps(meter_rules(rec))))
             n += 1
     s = 0
-    for i, f in enumerate(get(SWEEP)["features"]):
-        g = f["geometry"]
+    for i, f in enumerate(sweep_features()):
+        g = f.get("geometry") or {}
+        if g.get("type") not in ("Polygon", "MultiPolygon"): continue
         rings = g["coordinates"] if g["type"] == "Polygon" else [r for poly in g["coordinates"] for r in poly]
         pts = [pt for ring in rings for pt in ring]
         db.execute("INSERT INTO sweep VALUES(?,?,?,?,?,?,?)",
