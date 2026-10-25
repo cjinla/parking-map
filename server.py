@@ -9,6 +9,7 @@ from rules import Rule, move_by, current, to_dict
 from ingest import DB, DAYS
 
 D3 = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+COVERAGE = "Covers meter time limits and permit districts only. Street sweeping, tow-away zones and curb colors are not included, so check the signs."
 DISCLAIMER = "Posted signs always override this app. Data may be out of date."
 
 def dist(a, b, c, d):
@@ -110,9 +111,9 @@ class H(BaseHTTPRequestHandler):
         rules, address, conf, warnings = lookup(lat, lng, now)
         if not rules:
             return self.reply(200, {"status": "unknown", "headline": "No rules found for this spot",
-                                    "confidence": "none", "warnings": warnings, "disclaimer": DISCLAIMER})
+                                    "confidence": "none", "warnings": warnings, "coverage": COVERAGE, "disclaimer": DISCLAIMER})
         out = move_by(rules, now)
-        out.update(address=address, confidence=conf, warnings=warnings, rules=[to_dict(r) for r in rules], disclaimer=DISCLAIMER)
+        out.update(address=address, confidence=conf, warnings=warnings, coverage=COVERAGE, rules=[to_dict(r) for r in rules], disclaimer=DISCLAIMER)
         self.reply(200, out)
 
     def reply(self, code, body):
