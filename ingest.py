@@ -18,6 +18,7 @@ def get(url):
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"HTTP {e.code} for {url[:100]}: {e.read()[:200]!r}")
 
+SWEEP_ALT = "https://data.lacity.org/resource/krk7-ayq2.geojson?$limit=5000"   # city open-data copy of posted routes
 SWEEP_BASE = "https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/ArcGIS/rest/services/Biweekly_Routes_2021/FeatureServer"
 
 def esri_to_geo(f):
@@ -46,6 +47,13 @@ def sweep_features():
             if feats: return feats
         except Exception as e:
             print(f"Warning: sweeping layer {layer} failed: {e}")
+    try:                       # fallback: the city\'s open-data copy of the posted routes
+        feats = get(SWEEP_ALT).get("features", [])
+        if feats:
+            print(f"Sweeping: loaded {len(feats)} routes from the open-data portal copy", flush=True)
+            return feats
+    except Exception as e:
+        print(f"Warning: sweeping fallback failed: {e}")
     print("Warning: no sweeping data loaded")
     return []
 

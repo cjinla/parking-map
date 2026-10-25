@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from rules import Rule, move_by, current, to_dict
 from ingest import DB, DAYS
 
+D3 = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 DISCLAIMER = "Posted signs always override this app. Data may be out of date."
 
 def dist(a, b, c, d):
@@ -26,18 +27,36 @@ def inside(lng, lat, geom):
         if c: return True
     return False
 
+FULL = r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"
+ABBR = r"^(mon|tues?|wed|thu(?:rs?)?|fri|sat|sun)(?:day|sday|nesday|rsday|urday)?$"
+
+def sweep_day(props):
+    """Prefer fields named like 'day'; otherwise only accept full day names (avoids 'Sunset', 'Sun Valley')."""
+    for k, val in props.items():
+        if "day" in k.lower() or "dow" in k.lower():
+            m = re.match(ABBR, str(val).strip().lower())
+            if m: return [d for d in range(7) if DAYS[d][:3] == m[1][:3]][0]
+    m = re.search(FULL, " ".join(str(x) for x in props.values()).lower())
+    return DAYS.index(m[1][:3]) if m else None
+
 def sweep_rule(props):
-    text = " ".join(str(v) for v in props.values()).lower()
-    day = next((i for i, d in enumerate(DAYS) if re.search(r"\b" + d, text)), None)
-    t = re.search(r"(\d{1,2})(?::(\d{2}))?\s*([ap]m)\D+(\d{1,2})(?::(\d{2}))?\s*([ap]m)", text)
-    if day is None or not t: return None
+    day = sweep_day(props)
+    if day is None: return None
+    pick = {k: v for k, v in props.items() if re.search(r"time|hour|start|end", k.lower())} or props
+    text = " ".join(str(x) for x in pick.values()).lower()
     def m(h, mi, ap): return (int(h) % 12 + (12 if ap == "pm" else 0)) * 60 + int(mi or 0)
-    return Rule("no", [day], m(t[1], t[2], t[3]), m(t[4], t[5], t[6]), "Street sweeping (check sign)",
-                source="StreetsLA posted routes", confidence="low")
+    t = re.search(r"(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m?\D+?(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m?", text)
+    if t: a, b = m(t[1], t[2], t[3] + "m"), m(t[4], t[5], t[6] + "m")
+    else:
+        h = re.findall(r"\b([01]?\d|2[0-3]):([0-5]\d)", text)
+        if len(h) < 2: return None
+        a, b = int(h[0][0]) * 60 + int(h[0][1]), int(h[1][0]) * 60 + int(h[1][1])
+    return Rule("no", [day], a, b, "Street sweeping (check sign)", source="Posted sweeping routes", confidence="low")
 
 def lookup(lat, lng, now):
     db = sqlite3.connect(DB)
     box = 0.0006  # about 60 m
+    sweep_warn = []
     rules, address, conf = [], None, "low"
     rows = db.execute("SELECT lat,lng,address,rules FROM meters WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?",
                       (lat - box, lat + box, lng - box, lng + box)).fetchall()
@@ -48,9 +67,12 @@ def lookup(lat, lng, now):
             address, conf = best[2], "high"
     for props, geom in db.execute("SELECT props,geom FROM sweep WHERE ? BETWEEN minlat AND maxlat AND ? BETWEEN minlng AND maxlng", (lat, lng)):
         if inside(lng, lat, json.loads(geom)):
-            r = sweep_rule(json.loads(props))
+            p = json.loads(props)
+            r = sweep_rule(p)
             if r: rules.append(r)
-    warnings = []
+            elif sweep_day(p) is not None:
+                sweep_warn.append("A posted street-sweeping route covers this area (" + D3[sweep_day(p)] + "). Check the sign for times.")
+    warnings = list(sweep_warn)
     try:
         for props, geom in db.execute("SELECT props,geom FROM ppd WHERE ? BETWEEN minlat AND maxlat AND ? BETWEEN minlng AND maxlng", (lat, lng)):
             if inside(lng, lat, json.loads(geom)):
