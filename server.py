@@ -98,8 +98,23 @@ def lookup(lat, lng, now):
     return rules, address, conf, warnings
 
 class H(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path in ("/", "/index.html"):
+            page = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
+            try:
+                data = open(page, "rb").read()
+            except OSError:
+                return self.reply(404, {"error": "index.html is missing from the repository"})
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            return self.wfile.write(data)
         if u.path != "/check": return self.reply(404, {"error": "use /check?lat=&lng="})
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
