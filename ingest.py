@@ -99,6 +99,13 @@ def meter_rules(rec):
              "limit_min": lim, "source": "LADOT meter inventory",
              "confidence": "high" if known else "low", "hours_known": known}]
 
+def flat(c):
+    """Yield every [lng, lat] pair in nested GeoJSON coordinates."""
+    if c and isinstance(c[0], (int, float)):
+        yield c
+    else:
+        for x in c: yield from flat(x)
+
 def load():
     print("Downloading meters...", flush=True)
     db = sqlite3.connect(DB)
@@ -114,15 +121,20 @@ def load():
                        (rec.get("spaceid"), p[0], p[1], rec.get("blockface") or "", json.dumps(meter_rules(rec))))
             n += 1
     s = 0
+    types = {}
     for i, f in enumerate(sweep_features()):
         g = f.get("geometry") or {}
-        if g.get("type") not in ("Polygon", "MultiPolygon"): continue
-        rings = g["coordinates"] if g["type"] == "Polygon" else [r for poly in g["coordinates"] for r in poly]
-        pts = [pt for ring in rings for pt in ring]
+        types[g.get("type")] = types.get(g.get("type"), 0) + 1
+        if i == 0: print("Sample sweeping properties:", json.dumps(f.get("properties"))[:400], flush=True)
+        if g.get("type") not in ("Polygon", "MultiPolygon", "LineString", "MultiLineString"): continue
+        pts = list(flat(g["coordinates"]))
+        pad = 0.0004   # about 40 m, so streets (lines) still match nearby points
         db.execute("INSERT INTO sweep VALUES(?,?,?,?,?,?,?)",
                    (i, json.dumps(f["properties"]), json.dumps(g),
-                    min(p[1] for p in pts), max(p[1] for p in pts), min(p[0] for p in pts), max(p[0] for p in pts)))
+                    min(p[1] for p in pts) - pad, max(p[1] for p in pts) + pad,
+                    min(p[0] for p in pts) - pad, max(p[0] for p in pts) + pad))
         s += 1
+    print("Sweeping geometry types:", types, flush=True)
     db.execute("DROP TABLE IF EXISTS ppd")
     db.execute("CREATE TABLE ppd(props TEXT, geom TEXT, minlat REAL, maxlat REAL, minlng REAL, maxlng REAL)")
     p = 0

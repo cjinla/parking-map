@@ -39,6 +39,19 @@ def sweep_day(props):
     m = re.search(FULL, " ".join(str(x) for x in props.values()).lower())
     return DAYS.index(m[1][:3]) if m else None
 
+def near(lng, lat, geom, meters=30):
+    """True if the point is within `meters` of a street line."""
+    k = math.cos(lat * math.pi / 180) * 111320
+    px, py = lng * k, lat * 110574
+    lines = [geom["coordinates"]] if geom["type"] == "LineString" else geom["coordinates"]
+    for line in lines:
+        for (x1, y1), (x2, y2) in zip(line, line[1:]):
+            ax, ay, bx, by = x1 * k, y1 * 110574, x2 * k, y2 * 110574
+            dx, dy = bx - ax, by - ay
+            t = 0 if dx == dy == 0 else max(0, min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+            if math.hypot(px - ax - t * dx, py - ay - t * dy) <= meters: return True
+    return False
+
 def sweep_rule(props):
     day = sweep_day(props)
     if day is None: return None
@@ -66,7 +79,8 @@ def lookup(lat, lng, now):
             rules += [Rule(**r) for r in json.loads(best[3])]
             address, conf = best[2], "high"
     for props, geom in db.execute("SELECT props,geom FROM sweep WHERE ? BETWEEN minlat AND maxlat AND ? BETWEEN minlng AND maxlng", (lat, lng)):
-        if inside(lng, lat, json.loads(geom)):
+        g = json.loads(geom)
+        if (inside(lng, lat, g) if g["type"] in ("Polygon", "MultiPolygon") else near(lng, lat, g)):
             p = json.loads(props)
             r = sweep_rule(p)
             if r: rules.append(r)
