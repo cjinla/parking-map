@@ -66,9 +66,10 @@ def mins(txt):
     return h * 60 + int(m[2] or 0)
 
 def parse_limit(txt):
-    m = re.search(r"(\d+(?:\.\d+)?)\s*(hr|hour|min)", (txt or "").lower())
-    if not m: return None
-    return int(float(m[1]) * (60 if m[2] in ("hr", "hour") else 1))
+    """'2HR' -> 120. Ranges like '2HR-4HR' or '4HR-30MIN' vary by time of day, so use the smallest."""
+    vals = [int(float(n) * (60 if u in ("hr", "hour") else 1))
+            for n, u in re.findall(r"(\d+(?:\.\d+)?)\s*(hr|hour|min)", (txt or "").lower())]
+    return min(vals) if vals else None
 
 def parse_hours(txt):
     m = re.search(r"(\d{1,2}(?::\d{2})?\s*[ap]m?)\s*-\s*(\d{1,2}(?::\d{2})?\s*[ap]m?)", (txt or "").lower().replace("a ", "am ").replace("p ", "pm "))
@@ -78,14 +79,17 @@ def parse_hours(txt):
     return 0, 1440
 
 def meter_rules(rec):
+    """The city's public feed has a limit but no enforced hours, so hours_known stays False
+    unless a future version of the data adds them."""
     lim = parse_limit(rec.get("timelimit"))
-    a, b = parse_hours(rec.get("operatinghours") or rec.get("operating_hours") or rec.get("meter_hours"))
-    rules = []
-    if lim:
-        rules.append({"kind": "limit", "days": [0, 1, 2, 3, 4, 5, 6], "start": a, "end": b,
-                      "label": f"{lim}-minute meter" if lim < 60 else f"{lim // 60}-hour meter",
-                      "limit_min": lim, "source": "LADOT meter inventory", "confidence": "high"})
-    return rules
+    hrs = rec.get("operatinghours") or rec.get("operating_hours") or rec.get("meter_hours")
+    a, b = parse_hours(hrs)
+    known = bool(hrs) and (a, b) != (0, 1440)
+    if not lim: return []
+    label = f"{lim}-minute limit" if lim < 60 else f"{lim // 60}-hour limit"
+    return [{"kind": "limit", "days": [0, 1, 2, 3, 4, 5, 6], "start": a, "end": b, "label": label,
+             "limit_min": lim, "source": "LADOT meter inventory",
+             "confidence": "high" if known else "low", "hours_known": known}]
 
 def load():
     print("Downloading meters...", flush=True)

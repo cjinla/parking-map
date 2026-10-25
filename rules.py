@@ -14,6 +14,7 @@ class Rule:
     limit_min: int = None     # for kind == "limit"
     source: str = ""
     confidence: str = "high"  # "high" (sign-level data) | "low" (area-level data)
+    hours_known: bool = True  # False when the city data gives a limit but not the enforced hours
 
 def active(r: Rule, dt: datetime) -> bool:
     m, d = dt.hour * 60 + dt.minute, dt.weekday()
@@ -48,8 +49,13 @@ def move_by(rules, dt):
             break
     if deadline is None:
         return {"status": "ok", "headline": "No restrictions this week", "move_by": None}
-    return {"status": "limit" if cur else "ok",
-            "headline": "You can park, but move your car by " + deadline.strftime("%a %I:%M %p"),
-            "move_by": deadline.isoformat(), "reason": why}
+    headline = "You can park, but move your car by " + deadline.strftime("%a %I:%M %p")
+    out = {"status": "limit" if cur else "ok", "headline": headline,
+           "move_by": deadline.isoformat(), "reason": why}
+    if cur and cur.limit_min and not cur.hours_known and why and why.endswith("ends"):
+        out["headline"] = ("If the meter is in operation, move your car by "
+                           + deadline.strftime("%a %I:%M %p") + ". Check the sign for hours.")
+        out["hours_known"] = False
+    return out
 
 def to_dict(r): return asdict(r)
