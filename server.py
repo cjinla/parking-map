@@ -1,6 +1,7 @@
 """GET /check?lat=34.10&lng=-118.33[&at=2026-10-23T14:00]  ->  JSON answer.
 Run:  python server.py   (port 8080; stdlib only)"""
-import json, math, os, re, sqlite3
+import json, math, os, re, sqlite3, urllib.request
+from urllib.parse import urlencode
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -67,16 +68,26 @@ def sweep_rule(props):
         a, b = int(h[0][0]) * 60 + int(h[0][1]), int(h[1][0]) * 60 + int(h[1][1])
     return Rule("no", [day], a, b, "Street sweeping (check sign)", source="Posted sweeping routes", confidence="low")
 
-def lookup(lat, lng, now):
+def geocode(addr):
+    """Free US Census geocoder. Returns (lat, lng, matched address) or None."""
+    if "," not in addr: addr += ", Los Angeles, CA"
+    url = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?" + urlencode(
+        {"address": addr, "benchmark": "Public_AR_Current", "format": "json"})
+    req = urllib.request.Request(url, headers={"User-Agent": "la-parking-app/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as f:
+        m = json.load(f)["result"]["addressMatches"]
+    if m: return float(m[0]["coordinates"]["y"]), float(m[0]["coordinates"]["x"]), m[0]["matchedAddress"]
+
+def lookup(lat, lng, now, radius=40):
     db = sqlite3.connect(DB)
-    box = 0.0006  # about 60 m
+    box = radius * 1.5e-5  # degrees, a little wider than the radius
     sweep_warn = []
     rules, address, conf = [], None, "low"
     rows = db.execute("SELECT lat,lng,address,rules FROM meters WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?",
                       (lat - box, lat + box, lng - box, lng + box)).fetchall()
     if rows:
         best = min(rows, key=lambda r: dist(lat, lng, r[0], r[1]))
-        if dist(lat, lng, best[0], best[1]) <= 40:
+        if dist(lat, lng, best[0], best[1]) <= radius:
             rules += [Rule(**r) for r in json.loads(best[3])]
             address, conf = best[2], "high"
     for props, geom in db.execute("SELECT props,geom FROM sweep WHERE ? BETWEEN minlat AND maxlat AND ? BETWEEN minlng AND maxlng", (lat, lng)):
@@ -117,19 +128,31 @@ class H(BaseHTTPRequestHandler):
             return self.wfile.write(data)
         if u.path != "/check": return self.reply(404, {"error": "use /check?lat=&lng="})
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
-        try:
-            lat, lng = float(q["lat"]), float(q["lng"])
-        except (KeyError, ValueError):
-            return self.reply(400, {"error": "lat and lng are required numbers"})
+        searched, radius = None, 40
+        if q.get("address"):
+            try:
+                g = geocode(q["address"][:200])
+            except Exception:
+                g = None
+            if not g:
+                return self.reply(200, {"status": "unknown", "headline": "Couldn\u2019t find that address",
+                                        "confidence": "none", "warnings": [], "coverage": COVERAGE, "disclaimer": DISCLAIMER})
+            lat, lng, searched = g
+            radius = 75   # geocoded addresses are approximate, so search a little wider
+        else:
+            try:
+                lat, lng = float(q["lat"]), float(q["lng"])
+            except (KeyError, ValueError):
+                return self.reply(400, {"error": "give lat and lng, or an address"})
         tz = ZoneInfo("America/Los_Angeles")
         now = datetime.fromisoformat(q["at"]).replace(tzinfo=tz) if "at" in q else datetime.now(tz)
-        rules, address, conf, warnings = lookup(lat, lng, now)
+        rules, address, conf, warnings = lookup(lat, lng, now, radius)
         if not rules:
             return self.reply(200, {"status": "unknown", "headline": "No rules found for this spot",
-                                    "confidence": "none", "warnings": warnings, "coverage": COVERAGE, "disclaimer": DISCLAIMER})
+                                    "confidence": "none", "warnings": warnings, "searched": searched, "coverage": COVERAGE, "disclaimer": DISCLAIMER})
         out = move_by(rules, now)
         if out.get("hours_known") is False: conf = "low"   # limit known, enforced hours not
-        out.update(address=address, confidence=conf, warnings=warnings, coverage=COVERAGE, rules=[to_dict(r) for r in rules], disclaimer=DISCLAIMER)
+        out.update(searched=searched, address=address, confidence=conf, warnings=warnings, coverage=COVERAGE, rules=[to_dict(r) for r in rules], disclaimer=DISCLAIMER)
         self.reply(200, out)
 
     def reply(self, code, body):
