@@ -32,6 +32,9 @@ button:focus-visible{outline:3px solid #6fa8ff;outline-offset:2px}
 <main>
 <h1>Can I park here?</h1>
 <button id="go" type="button">Find my spot</button>
+<label for="addr" style="display:block;margin:16px 0 4px;color:var(--mute);font-size:14px">Or check an address</label>
+<input id="addr" type="text" placeholder="201 3rd St, Los Angeles" autocomplete="street-address" style="width:100%;font:inherit;color:var(--ink);background:var(--card);border:1.5px solid var(--line);border-radius:8px;padding:12px">
+<button id="addrgo" class="alt" type="button">Check address</button>
 <button id="again" class="alt" type="button" hidden>Check again</button>
 <div id="out" aria-live="polite"></div>
 </main>
@@ -42,6 +45,7 @@ function say(t){out.innerHTML='<div class="box">'+esc(t)+'</div>'}
 function show(d){
  var cls={ok:"ok",limit:"limit",permit:"permit",no:"no"}[d.status]||"unknown";
  var h='<div class="sign '+cls+'"><b>'+esc(d.headline)+'</b>';
+ if(d.searched)h+='<p>Searched near: '+esc(d.searched)+'</p>';
  if(d.address)h+='<p>Nearest meter: '+esc(d.address)+'</p>';
  h+='</div>';
  (d.warnings||[]).forEach(function(w){h+='<div class="box warn">'+esc(w)+'</div>'});
@@ -61,8 +65,13 @@ function check(){
    .catch(function(){say("Couldn’t reach the server. Try again in a moment.");go.disabled=false})
  },function(){say("Location is off or blocked. In Settings, allow location for Safari websites, then try again.");go.disabled=false},
  {enableHighAccuracy:true,timeout:15000})}
+function byAddress(){var a=document.getElementById("addr").value.trim();if(!a){say("Type an address first.");return}
+ say("Checking the rules. The first check can take up to a minute while the server wakes up…");
+ fetch("/check?address="+encodeURIComponent(a)).then(function(r){if(!r.ok)throw 0;return r.json()})
+  .then(function(d){show(d);again.hidden=true})
+  .catch(function(){say("Couldn’t reach the server. Try again in a moment.")})}
+document.getElementById("addrgo").addEventListener("click",byAddress);
 go.addEventListener("click",check);again.addEventListener("click",check);
 </script>
 </body>
 </html>
-
