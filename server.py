@@ -9,7 +9,7 @@ from rules import Rule, move_by, current, to_dict
 from ingest import DB, DAYS
 
 D3 = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-COVERAGE = "Covers meter time limits and permit districts only. Street sweeping, tow-away zones and curb colors are not included, so check the signs."
+COVERAGE = "Covers meter time limits and permit districts. Street sweeping is only a rough, unverified hint on major streets. Tow-away zones and curb colors are not included, so check the signs."
 DISCLAIMER = "Posted signs always override this app. Data may be out of date."
 
 def dist(a, b, c, d):
@@ -86,7 +86,7 @@ def lookup(lat, lng, now):
             r = sweep_rule(p)
             if r: rules.append(r)
             elif sweep_day(p) is not None:
-                sweep_warn.append("A posted street-sweeping route covers this area (" + D3[sweep_day(p)] + "). Check the sign for times.")
+                sweep_warn.append("Unverified: this major street may be swept on " + D3[sweep_day(p)] + "s (times unknown). Check the signs for any sweeping restriction.")
     warnings = list(sweep_warn)
     try:
         for props, geom in db.execute("SELECT props,geom FROM ppd WHERE ? BETWEEN minlat AND maxlat AND ? BETWEEN minlng AND maxlng", (lat, lng)):

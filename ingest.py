@@ -19,7 +19,7 @@ def get(url):
         raise RuntimeError(f"HTTP {e.code} for {url[:100]}: {e.read()[:200]!r}")
 
 SWEEP_ALT = "https://data.lacity.org/resource/krk7-ayq2.geojson?$limit=5000"   # city open-data copy of posted routes
-SWEEP_BASE = "https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/ArcGIS/rest/services/Biweekly_Routes_2021/FeatureServer"
+SWEEP_BASE = "https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/ArcGIS/rest/services/ADAPT_AMRoutes/FeatureServer"   # major-street sweeping routes (has a Day field, no times)
 
 def esri_to_geo(f):
     """This service only speaks Esri JSON (rings), so convert it to a GeoJSON-style feature."""
