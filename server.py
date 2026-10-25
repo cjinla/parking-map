@@ -113,6 +113,7 @@ class H(BaseHTTPRequestHandler):
             return self.reply(200, {"status": "unknown", "headline": "No rules found for this spot",
                                     "confidence": "none", "warnings": warnings, "coverage": COVERAGE, "disclaimer": DISCLAIMER})
         out = move_by(rules, now)
+        if out.get("hours_known") is False: conf = "low"   # limit known, enforced hours not
         out.update(address=address, confidence=conf, warnings=warnings, coverage=COVERAGE, rules=[to_dict(r) for r in rules], disclaimer=DISCLAIMER)
         self.reply(200, out)
 
