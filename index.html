@@ -1,1 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Can I park here? Los Angeles</title>
+<style>
+:root{--bg:#eef1f4;--card:#fff;--ink:#16202c;--mute:#5d6b7a;--line:#d5dce3;box-sizing:border-box;
+padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root{--bg:#10161d;--card:#1a232d;--ink:#eef2f6;--mute:#9aa8b6;--line:#2c3945}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.45 -apple-system,system-ui,Helvetica,Arial,sans-serif}
+main{max-width:480px;margin:0 auto;padding:16px}
+h1{font:800 28px/1.1 "Arial Narrow",Arial,sans-serif;margin:8px 0 14px}
+h2{font-size:17px;margin:22px 0 8px}
+button{width:100%;font:600 17px inherit;font-family:inherit;color:#fff;background:#1d4f91;border:0;border-radius:10px;padding:15px}
+button:disabled{opacity:.6}
+button.alt{background:var(--card);color:var(--ink);border:1.5px solid var(--line);margin-top:10px}
+button:focus-visible{outline:3px solid #6fa8ff;outline-offset:2px}
+#out{margin-top:16px}
+.sign{border-radius:12px;padding:18px;color:#fff;background:var(--c)}
+.sign.ok{--c:#14803c}.sign.no{--c:#c4262e}.sign.limit{--c:#a35f00}.sign.permit{--c:#1d4f91}.sign.unknown{--c:#56626f}
+.sign b{display:block;font-size:24px;line-height:1.2}
+.sign p{margin:8px 0 0}
+.box{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:8px}
+.warn{border-left:6px solid #a35f00}
+.rule span,.small{color:var(--mute);font-size:14px}
+.small{margin-top:18px}
+</style>
+</head>
+<body>
+<main>
+<h1>Can I park here?</h1>
+<button id="go" type="button">Find my spot</button>
+<button id="again" class="alt" type="button" hidden>Check again</button>
+<div id="out" aria-live="polite"></div>
+</main>
+<script>
+var go=document.getElementById("go"),again=document.getElementById("again"),out=document.getElementById("out");
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function say(t){out.innerHTML='<div class="box">'+esc(t)+'</div>'}
+function show(d){
+ var cls={ok:"ok",limit:"limit",permit:"permit",no:"no"}[d.status]||"unknown";
+ var h='<div class="sign '+cls+'"><b>'+esc(d.headline)+'</b>';
+ if(d.address)h+='<p>Nearest meter: '+esc(d.address)+'</p>';
+ h+='</div>';
+ (d.warnings||[]).forEach(function(w){h+='<div class="box warn">'+esc(w)+'</div>'});
+ if(d.confidence==="low")h+='<div class="box warn">Low confidence: the city data has a time limit but not when it is enforced.</div>';
+ if(d.rules&&d.rules.length){h+='<h2>Rules found</h2>';d.rules.forEach(function(r){
+  h+='<div class="box rule"><strong>'+esc(r.label)+'</strong><br><span>'+esc(r.source)+'</span></div>'})}
+ h+='<p class="small">'+esc(d.coverage||"")+' '+esc(d.disclaimer||"")+'</p>';
+ out.innerHTML=h}
+function check(){
+ go.disabled=true;again.hidden=true;say("Finding your location…");
+ if(!navigator.geolocation){say("This browser can’t share your location.");go.disabled=false;return}
+ navigator.geolocation.getCurrentPosition(function(p){
+  say("Checking the rules. The first check can take up to a minute while the server wakes up…");
+  fetch("/check?lat="+p.coords.latitude+"&lng="+p.coords.longitude)
+   .then(function(r){if(!r.ok)throw 0;return r.json()})
+   .then(function(d){show(d);go.disabled=false;go.textContent="Find my spot";again.hidden=false})
+   .catch(function(){say("Couldn’t reach the server. Try again in a moment.");go.disabled=false})
+ },function(){say("Location is off or blocked. In Settings, allow location for Safari websites, then try again.");go.disabled=false},
+ {enableHighAccuracy:true,timeout:15000})}
+go.addEventListener("click",check);again.addEventListener("click",check);
+</script>
+</body>
+</html>
 
