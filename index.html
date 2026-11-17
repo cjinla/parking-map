@@ -27,7 +27,7 @@ main{max-width:32rem;margin:0 auto;padding:var(--pad) var(--pad) 32px}
 h1{font-size:2rem;line-height:1.05;margin:4px 0 6px;letter-spacing:-.03em}
 .eyebrow{margin:0;color:var(--mute);font-size:.85rem;font-weight:650;letter-spacing:.04em;text-transform:uppercase}
 [hidden]{display:none !important}
-button,a.btn{display:block;width:100%;font:700 1.05rem/1.2 inherit;text-align:center;text-decoration:none;
+button,a.btn,label.btn{display:block;width:100%;font:700 1.05rem/1.2 inherit;text-align:center;text-decoration:none;
   color:#fff;background:var(--permit);border:0;border-radius:14px;padding:16px 14px;min-height:52px}
 button:disabled{opacity:.6}
 button.alt,a.alt{background:var(--card);color:var(--ink);border:1.5px solid var(--line);margin-top:10px}
@@ -43,7 +43,7 @@ input,select{width:100%;font:inherit;color:var(--ink);background:var(--card);bor
 .chips label{margin:0;color:var(--ink);border:1.5px solid var(--line);background:var(--card);border-radius:999px;padding:8px 10px;font-size:.95rem}
 .chips input{width:auto;margin-right:4px}
 #out{margin-top:16px}
-#out button,#out a.btn{margin-top:12px}
+#out button,#out a.btn,#out label.btn{margin-top:12px}
 .sign{border-radius:18px;padding:18px 16px;color:#fff;background:var(--c,#3e4c59)}
 .sign.ok{--c:var(--yes)}
 .sign.limit{--c:var(--limit)}
@@ -72,6 +72,7 @@ input,select{width:100%;font:inherit;color:var(--ink);background:var(--card);bor
 .alarm{position:sticky;bottom:0;margin-top:12px;background:var(--no);color:#fff;border-radius:14px;padding:14px}
 .alarm button{background:#fff;color:var(--no);margin-top:8px}
 .small{color:var(--mute);font-size:.85rem;margin-top:16px}
+.filecam{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
 .code,input.code{font-family:ui-monospace,Menlo,monospace;font-size:.9rem;word-break:break-all}
 .checkline{display:flex;gap:8px;align-items:center}
 .checkline input{width:auto}
@@ -108,6 +109,8 @@ input,select{width:100%;font:inherit;color:var(--ink);background:var(--card);bor
 var out = document.getElementById("out");
 var go = document.getElementById("go");
 var spot = null;
+var signPhotos = [];
+var scanId = null;
 var timers = [];
 var nag = null;
 var audioCtx = null;
@@ -261,6 +264,9 @@ function show(d, gpsNote){
       h += '</ul></section>';
     });
   }
+  h += '<label class="btn" for="scanfile">Scan sign</label>';
+  h += '<input id="scanfile" class="filecam" type="file" accept="image/*" capture="environment" aria-label="Photograph the parking sign">';
+  h += '<p id="scanhint" class="hint"></p><div id="scanread"></div>';
   h += signForm(d);
   h += '<p class="small">'+esc(d.coverage || "")+' '+esc(d.disclaimer || "")+'</p>';
   if (d.sources && d.sources.length){
@@ -276,6 +282,105 @@ function show(d, gpsNote){
   var have = document.getElementById("have");
   if (have) have.addEventListener("click", function(){recheck(true)});
   document.getElementById("apply").addEventListener("click", function(){recheck(false)});
+  var file = document.getElementById("scanfile");
+  if (file) file.addEventListener("change", function(){
+    var picked = file.files && file.files[0];
+    file.value = "";
+    if (!picked) return;
+    shrinkPhoto(picked).then(function(url){
+      signPhotos.push(url);
+      var hint = document.getElementById("scanhint");
+      if (hint) hint.textContent = signPhotos.length + (signPhotos.length === 1 ? " photo." : " photos.") + " Add another stacked sign, or read them.";
+      if (!document.getElementById("readsigns")) {
+        var box = document.getElementById("scanread");
+        if (!box) return;
+        box.innerHTML = '<button id="readsigns" type="button">Read sign</button>';
+        document.getElementById("readsigns").addEventListener("click", readSigns);
+      }
+    });
+  });
+}
+function fromMin(m){
+  if (m == null || m === "") return "";
+  var h = Math.floor(m / 60), mi = m % 60;
+  return (h < 10 ? "0" : "") + h + ":" + (mi < 10 ? "0" : "") + mi;
+}
+function setDays(name, days){
+  document.querySelectorAll('input[name="'+name+'"]').forEach(function(el){el.checked = days.indexOf(+el.value) >= 0});
+}
+function setWindow(prefix, daysName, window, index){
+  var rows = document.querySelectorAll('[data-window="'+prefix+'"]');
+  var row = rows[index || 0];
+  if (!row || !window) return;
+  setDays(daysName, window.days || []);
+  var start = row.querySelector(".wstart"), end = row.querySelector(".wend");
+  if (start) start.value = fromMin(window.start);
+  if (end) end.value = fromMin(window.end);
+}
+function fillSignForm(sign){
+  var box = document.getElementById("signbox");
+  if (box) box.open = true;
+  var limit = document.getElementById("limit");
+  if (limit && sign.time_limit_min != null) {
+    var value = String(sign.time_limit_min);
+    if (![].some.call(limit.options, function(o){return o.value === value})) {
+      var opt = document.createElement("option");
+      opt.value = value; opt.textContent = value + " minutes";
+      limit.appendChild(opt);
+    }
+    limit.value = value;
+  }
+  if (sign.limit_days) setDays("limit-days", sign.limit_days);
+  var ls = document.getElementById("lstart"), le = document.getElementById("lend");
+  if (ls && sign.limit_start != null) ls.value = fromMin(sign.limit_start);
+  if (le && sign.limit_end != null) le.value = fromMin(sign.limit_end);
+  var rate = document.getElementById("rate");
+  if (rate && sign.rate) rate.value = sign.rate;
+  if (sign.sweeping && sign.sweeping[0]) setWindow("sweep", "sweep-days", sign.sweeping[0]);
+  if (sign.tow && sign.tow[0]) setWindow("tow", "tow-days-1", sign.tow[0], 0);
+  if (sign.tow && sign.tow[1]) setWindow("tow", "tow-days-2", sign.tow[1], 1);
+  if (sign.permit && sign.permit[0]) setWindow("permit", "permit-days", sign.permit[0]);
+  var red = document.getElementById("red");
+  if (red) red.checked = !!sign.red_curb;
+  var hol = document.getElementById("holen");
+  if (hol) hol.checked = !!sign.holidays_enforced;
+}
+function shrinkPhoto(file){
+  return new Promise(function(resolve){
+    var img = new Image();
+    img.onload = function(){
+      var max = 1600, scale = Math.min(1, max / Math.max(img.width, img.height));
+      var canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(img.src);
+      resolve(canvas.toDataURL("image/jpeg", 0.8));
+    };
+    img.onerror = function(){resolve("")};
+    img.src = URL.createObjectURL(file);
+  });
+}
+function readSigns(){
+  if (!signPhotos.length || !spot) return;
+  var box = document.getElementById("scanread");
+  if (box) box.innerHTML = '<div class="box">Reading the sign…</div>';
+  fetch("/api/sign", {method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({images: signPhotos, lat: spot.lat, lng: spot.lng})})
+    .then(function(r){if(!r.ok) throw 0; return r.json()})
+    .then(function(d){
+      scanId = d.scan_id || scanId;
+      var html = "";
+      if (d.message) html += '<div class="box warn">'+esc(d.message)+'</div>';
+      (d.summary || []).forEach(function(line){html += '<div class="box"><strong>'+esc(line)+'</strong></div>'});
+      (d.conflicts || []).forEach(function(line){html += '<div class="box warn">'+esc(line)+'</div>'});
+      if (d.text) html += '<details><summary>Words read from the photo</summary><p>'+esc(d.text)+'</p></details>';
+      html += '<p class="hint">Check this, edit anything wrong, then tap Use this sign. The photo is saved with the spot when you park.</p>';
+      if (box) box.innerHTML = html;
+      if (d.sign && (d.summary || []).length) fillSignForm(d.sign);
+      else {var details = document.getElementById("signbox"); if (details) details.open = true}
+    })
+    .catch(function(){if (box) box.innerHTML = '<div class="box warn">Couldn’t send the photo. Type what the sign says.</div>'});
 }
 function signForm(d){
   var open = d.status === "unknown" ? " open" : "";
@@ -319,6 +424,7 @@ function savePark(){
   try { sub = JSON.parse(localStorage.getItem("la-park-sub") || "null"); } catch (e) {}
   if (sub) body.subscription = sub;
   body.settings = settingsPayload(loadSettings());
+  if (scanId) body.scan_id = scanId;
   fetch("/park", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)})
     .then(function(r){if(!r.ok) throw 0; return r.json()})
     .then(function(d){
@@ -458,6 +564,7 @@ function b64ToBuf(s){
   return a;
 }
 function checkGps(){
+  signPhotos = []; scanId = null;
   go.disabled = true;
   say("Finding your location…");
   if (!navigator.geolocation) { say("This browser can’t share your location. Type an address instead."); go.disabled = false; return; }
@@ -474,6 +581,7 @@ function checkGps(){
   }, {enableHighAccuracy:true, timeout:15000, maximumAge:10000});
 }
 function byAddress(){
+  signPhotos = []; scanId = null;
   var a = document.getElementById("addr").value.trim();
   if (!a) { say("Type an address first."); return; }
   say("Checking Los Angeles rules. The first check can take a minute while the server wakes up…");

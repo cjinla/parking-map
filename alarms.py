@@ -39,6 +39,8 @@ def connect():
         id INTEGER PRIMARY KEY AUTOINCREMENT, park_id TEXT, fire_at TEXT, kind TEXT, sent INTEGER DEFAULT 0);
       CREATE TABLE IF NOT EXISTS devices (
         token TEXT PRIMARY KEY, sub_id TEXT, created TEXT, settings TEXT);
+      CREATE TABLE IF NOT EXISTS photos (
+        id TEXT PRIMARY KEY, scan_id TEXT, park_id TEXT, path TEXT, created TEXT);
     """)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(parks)")}
     if "device_token" not in cols:

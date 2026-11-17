@@ -17,7 +17,7 @@ Python 3.9+. Runtime packages are `tzdata` and `pywebpush` (Web Push). City data
 1. Open **Safari** (not Chrome) to https://la-parking-yvn1.onrender.com. The first open can take about a minute while the free Render instance wakes up.
 2. Tap **Check this spot** and allow location. Or type an address.
 3. Read the big answer: **Yes**, **No**, **Permit**, or **Unknown**. Under it: move-by time, time limit, meter price if the city published one, and a day-by-day timeline (today and the next three days).
-4. If a line says the city data does not have that rule, open **What does the sign say?** and enter the sign. Posted signs override the app.
+4. Tap **Scan sign** to photograph one or more stacked signs, or open **What does the sign say?** and type it. Confirm the reading, then tap **Use this sign**. Posted signs override the city data, and a disagreement is called out. The photo is saved with the parking session.
 5. Tap **I parked here**.
 6. Tap **Add to Calendar** and add the event. It carries three alarms: 15 minutes before, 5 minutes before, and at the deadline. This is the alarm that still rings if notifications are off or the server is asleep.
 7. For lock-screen alerts from the app itself (iOS 16.4 or newer):
@@ -66,6 +66,20 @@ Backup: the shortcut can **Open URL** `https://la-parking-yvn1.onrender.com/auto
 CarPlay “Disconnects” can run with the phone locked. Apple sometimes still asks you to confirm the Bluetooth automation. If Ask Before Running cannot be turned off, tap the Shortcuts banner once when you park and the timer starts. The other automation still covers that trip.
 
 The free Render service sleeps. The Shortcut wakes it. The first call after a long idle can take about a minute, and Shortcuts may report a timeout; run it once more.
+
+## Scan a sign
+
+On the spot screen, **Scan sign** opens the iPhone camera (`<input type="file" accept="image/*" capture="environment">`). Take one photo of the stack, or add another, then tap **Read sign**.
+
+The server sends the image to OpenAI’s vision chat API (model `gpt-4o-mini` unless you change it) and asks only for the printed words. A local parser turns that text into time limits, days and hours, no-parking / tow-away, street sweeping, permit-only hours, meter hours and price, holiday wording, and arrows. You see those rules in plain language and can edit them before they are saved. Where the sign and the city feed disagree, the sign wins and the screen says so.
+
+Environment variables, set in the Render dashboard, never committed:
+
+- `SIGN_VISION_API_KEY` — OpenAI API key. If this is unset, the photo is still saved and the app asks you to type the sign.
+- `SIGN_VISION_MODEL` — optional, default `gpt-4o-mini`.
+- `SIGN_VISION_URL` — optional, default `https://api.openai.com/v1/chat/completions`, for a compatible endpoint.
+
+`render.yaml` lists `SIGN_VISION_API_KEY` with `sync: false`.
 
 ## What the check returns
 

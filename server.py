@@ -17,8 +17,10 @@ from urllib.parse import urlencode, urlparse, parse_qs
 from zoneinfo import ZoneInfo
 
 import alarms
+import signread
 from ingest import DB as DATA_DB
 from rules import Rule, WEEKDAYS, answer, apply_sign, clock_label, parse_days, rule_from_json, to_dict
+from signparse import sign_conflicts
 
 DB = os.environ.get("PARKING_DB", DATA_DB)
 TZ = ZoneInfo("America/Los_Angeles")
@@ -221,6 +223,7 @@ def lookup(lat, lng, now, radius=40):
 def assemble(lat, lng, now, sign=None, has_permit=False, radius=40, searched=None):
     spot = find_spot(lat, lng, radius)
     rules = [r for r in spot["rules"] if not (has_permit and r.kind == "permit")]
+    conflict_notes = sign_conflicts(rules, sign) if sign else []
     if sign:
         rules = apply_sign(rules, sign)
     out = answer(rules, now)
@@ -228,7 +231,7 @@ def assemble(lat, lng, now, sign=None, has_permit=False, radius=40, searched=Non
         spot["warnings"] = list(spot["warnings"]) + [
             f"This meter is {spot['distance_m']} m from the GPS point. Confirm the space number on the meter."]
     note = out.get("holiday_note")
-    warnings = list(spot["warnings"])
+    warnings = list(spot["warnings"]) + [n for n in conflict_notes if n not in spot["warnings"]]
     if note and note not in warnings:
         warnings.insert(0, note)
     if not rules and not warnings:
@@ -364,7 +367,7 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         path = u.path.rstrip("/") or "/"
         try:
-            body = self.read_json()
+            body = self.read_json(12_000_000 if path == "/api/sign" else 100_000)
         except ValueError as e:
             return self.reply(400, {"error": str(e)})
         if path == "/check":
@@ -376,6 +379,8 @@ class H(BaseHTTPRequestHandler):
             return self.reply(code, payload)
         if path == "/api/device":
             return self.device_http(body)
+        if path == "/api/sign":
+            return self.sign_body(body)
         if path == "/push/subscribe":
             return self.subscribe(body)
         cancel = re.fullmatch(r"/park/([a-f0-9]{32})/cancel", path)
@@ -437,6 +442,8 @@ class H(BaseHTTPRequestHandler):
                 sub_id = alarms.upsert_sub(body["subscription"])
             out = park(lat, lng, now, sign=body.get("sign"), has_permit=bool(body.get("has_permit")),
                        radius=radius, sub_id=sub_id, searched=searched, settings=body.get("settings"))
+            if body.get("scan_id"):
+                out["photos_saved"] = signread.attach_scan(str(body["scan_id"])[:64], out["id"])
         except LookupError as e:
             return self.reply(200, {"status": "unknown", "headline": str(e)})
         except ValueError as e:
@@ -499,9 +506,23 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def read_json(self):
+    def sign_body(self, body):
+        try:
+            images = signread.decode_images(body.get("images"))
+        except ValueError as e:
+            return self.reply(400, {"error": str(e)})
+        city = []
+        if body.get("lat") is not None and body.get("lng") is not None:
+            try:
+                lat, lng = float(body["lat"]), float(body["lng"])
+                city = find_spot(lat, lng, 40)["rules"]
+            except (TypeError, ValueError):
+                city = []
+        self.reply(200, signread.read_sign(images, city))
+
+    def read_json(self, limit=100_000):
         n = int(self.headers.get("Content-Length") or 0)
-        if n > 100_000:
+        if n > limit:
             raise ValueError("request is too large")
         raw = self.rfile.read(n) if n else b"{}"
         try:

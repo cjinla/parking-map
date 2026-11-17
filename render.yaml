@@ -15,3 +15,7 @@ services:
         sync: false
       - key: VAPID_SUBJECT
         sync: false
+      # OpenAI vision key for Scan sign. Leave blank to keep photo evidence and type the sign.
+      # Optional SIGN_VISION_MODEL (default gpt-4o-mini) and SIGN_VISION_URL are read from the environment too.
+      - key: SIGN_VISION_API_KEY
+        sync: false

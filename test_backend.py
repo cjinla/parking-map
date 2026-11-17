@@ -1,5 +1,5 @@
 """Offline test: builds a tiny database by hand and checks the answers."""
-import json, sqlite3, os
+import base64, json, sqlite3, os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import ingest
@@ -9,6 +9,8 @@ server.DB = "test.db"
 from rules import (Rule, move_by, answer, windows, apply_sign, rules_from_sign, holiday_name,
                    sweeping_holiday_name, parse_days)
 import alarms
+import signparse
+import signread
 import vapid_keys
 from datetime import date
 
@@ -299,6 +301,55 @@ conn = sqlite3.connect(alarms.SESSION_DB)
 assert conn.execute("SELECT COUNT(*) FROM reminders WHERE park_id=? AND sent=0", (nag_park["id"],)).fetchone()[0] == 0
 conn.close()
 assert alarms.send_due(at("2026-10-23T16:11"), grab_nag) == 0
+
+# Sign text -> rules. Photos are not required; the vision API only supplies this text.
+sweep = signparse.parse_sign_text("NO PARKING\nSTREET SWEEPING\nTUESDAY\n8AM - 10AM\n←")
+assert sweep["summary"] == [
+    "Street sweeping 8:00 AM–10:00 AM, Tuesday.",
+    "Arrow points left. The rule applies that direction from the sign."]
+assert sweep["sweeping"] == [{"days": [1], "start": 480, "end": 600}] and sweep["arrows"] == "left"
+limit = signparse.parse_sign_text("2 HOUR PARKING\n8AM TO 6PM\nMONDAY - SATURDAY")
+assert limit["time_limit_min"] == 120 and limit["limit_days"] == list(range(6))
+assert limit["limit_start"] == 480 and limit["limit_end"] == 1080
+assert limit["summary"] == ["2-hour parking, 8:00 AM–6:00 PM, Monday–Saturday."]
+tow = signparse.parse_sign_text("TOW-AWAY\nNO STOPPING\n7AM - 9AM\n4PM - 7PM\nMONDAY THRU FRIDAY")
+assert tow["tow"] == [{"days": list(range(5)), "start": 420, "end": 540},
+                      {"days": list(range(5)), "start": 960, "end": 1140}]
+assert "7:00 AM–9:00 AM and 4:00 PM–7:00 PM, Monday–Friday" in tow["summary"][0]
+assert signparse.parse_sign_text("NO PARKING ANY TIME")["summary"] == ["No parking at any time."]
+permit = signparse.parse_sign_text("PERMIT PARKING ONLY\n6PM - 8AM\nDAILY")
+assert permit["permit"] == [{"days": list(range(7)), "start": 1080, "end": 480}]
+meter = signparse.parse_sign_text("PAY AT METER\n$1.50 PER HOUR\n2 HOUR LIMIT\n8AM - 8PM\nMON - SAT")
+assert meter["summary"] == ["2-hour meter, 8:00 AM–8:00 PM, Monday–Saturday, $1.50 per hour."]
+one = signparse.parse_sign_text("1 HOUR PARKING\n8AM-6PM\nEXCEPT SUNDAY\nHOLIDAYS ENFORCED\n→")
+assert one["time_limit_min"] == 60 and one["limit_days"] == list(range(6)) and one["holidays_enforced"] is True
+assert one["arrows"] == "right" and any("Holidays are enforced." == line for line in one["summary"])
+stacked = signparse.parse_sign_text(
+    "NO PARKING\nSTREET SWEEPING\nWEDNESDAY\n8AM TO 10AM\n\n2 HOUR PARKING\n8AM TO 6PM\nMON - SAT")
+assert stacked["sweeping"][0]["days"] == [2] and stacked["time_limit_min"] == 120
+both = signparse.parse_sign_text("2 HOUR PARKING\n8AM - 6PM\n← →")
+assert both["arrows"] == "both"
+city = [Rule("limit", list(range(7)), 0, 1440, "2-hour limit", 120, topic="meter", hours_known=False)]
+msgs = signparse.sign_conflicts(city, one)
+assert msgs and "disagree" in msgs[0] and "Using the sign" in msgs[0] and "1-hour" in msgs[0]
+same = signparse.parse_sign_text("2 HOUR PARKING\n8AM TO 6PM\nMONDAY - SATURDAY")
+agree_city = [Rule("limit", list(range(6)), 480, 1080, "2-hour limit", 120, topic="meter", hours_known=True)]
+assert signparse.sign_conflicts(agree_city, same) == []
+merged = apply_sign(city, one)
+assert len(merged) == 1 and merged[0].limit_min == 60 and merged[0].source == "Sign you entered"
+os.environ.pop("SIGN_VISION_API_KEY", None)
+assert signread.configured() is False
+try:
+    signread.decode_images([])
+    raise SystemExit("empty photos were accepted")
+except ValueError:
+    pass
+tiny = base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
+saved_scan = signread.read_sign(signread.decode_images(["data:image/png;base64," + tiny]), [])
+assert saved_scan["available"] is False and saved_scan["scan_id"] and "Type what the sign says" in saved_scan["message"]
+assert signread.attach_scan(saved_scan["scan_id"], "park123") == 1
+import shutil
+shutil.rmtree(signread.PHOTO_DIR, ignore_errors=True)
 os.remove("test.db")
 for name in ("test-sessions.db", "test-sessions.db-wal", "test-sessions.db-shm",
              "test-alerts.db", "test-alerts.db-wal", "test-alerts.db-shm"):
