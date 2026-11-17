@@ -3,75 +3,937 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Park LA">
+<meta name="theme-color" content="#1d4f91">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <title>Can I park here? Los Angeles</title>
 <style>
-:root{--bg:#eef1f4;--card:#fff;--ink:#16202c;--mute:#5d6b7a;--line:#d5dce3;box-sizing:border-box;
-padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
-@media (prefers-color-scheme:dark){:root{--bg:#10161d;--card:#1a232d;--ink:#eef2f6;--mute:#9aa8b6;--line:#2c3945}}
+:root{
+  --bg:#e7eef5;--card:#fff;--ink:#142033;--mute:#5c6b7c;--line:#d5dee8;
+  --yes:#0c7a3e;--no:#b42318;--limit:#6b3a00;--permit:#1d4f91;--unknown:#3e4c59;
+  --pad:16px;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#0e141b;--card:#18222c;--ink:#f2f6fa;--mute:#a9b6c4;--line:#2c3b4a}
+}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.45 -apple-system,system-ui,Helvetica,Arial,sans-serif}
-main{max-width:480px;margin:0 auto;padding:16px}
-h1{font:800 28px/1.1 "Arial Narrow",Arial,sans-serif;margin:8px 0 14px}
-h2{font-size:17px;margin:22px 0 8px}
-button{width:100%;font:600 17px inherit;font-family:inherit;color:#fff;background:#1d4f91;border:0;border-radius:10px;padding:15px}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 17px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+main{max-width:32rem;margin:0 auto;padding:var(--pad) var(--pad) 32px}
+h1{font-size:2rem;line-height:1.05;margin:4px 0 6px;letter-spacing:-.03em}
+.eyebrow{margin:0;color:var(--mute);font-size:.85rem;font-weight:650;letter-spacing:.04em;text-transform:uppercase}
+[hidden]{display:none !important}
+button,a.btn,label.btn{display:block;width:100%;font:700 1.05rem/1.2 inherit;text-align:center;text-decoration:none;
+  color:#fff;background:var(--permit);border:0;border-radius:14px;padding:16px 14px;min-height:52px}
 button:disabled{opacity:.6}
-button.alt{background:var(--card);color:var(--ink);border:1.5px solid var(--line);margin-top:10px}
-button:focus-visible{outline:3px solid #6fa8ff;outline-offset:2px}
+button.alt,a.alt{background:var(--card);color:var(--ink);border:1.5px solid var(--line);margin-top:10px}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #6fa8ff;outline-offset:2px}
+.hint{color:var(--mute);font-size:.9rem;margin:10px 0 0}
+details{margin-top:14px}
+summary{font-weight:650;cursor:pointer}
+label{display:block;margin:12px 0 4px;color:var(--mute);font-size:.9rem}
+input,select{width:100%;font:inherit;color:var(--ink);background:var(--card);border:1.5px solid var(--line);border-radius:10px;padding:12px}
+.row{display:flex;gap:8px}
+.row>*{flex:1}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chips label{margin:0;color:var(--ink);border:1.5px solid var(--line);background:var(--card);border-radius:999px;padding:8px 10px;font-size:.95rem}
+.chips input{width:auto;margin-right:4px}
 #out{margin-top:16px}
-.sign{border-radius:12px;padding:18px;color:#fff;background:var(--c)}
-.sign.ok{--c:#14803c}.sign.no{--c:#c4262e}.sign.limit{--c:#a35f00}.sign.permit{--c:#1d4f91}.sign.unknown{--c:#56626f}
-.sign b{display:block;font-size:24px;line-height:1.2}
+#out button,#out a.btn,#out label.btn{margin-top:12px}
+.sign{border-radius:18px;padding:18px 16px;color:#fff;background:var(--c,#3e4c59)}
+.sign.ok{--c:var(--yes)}
+.sign.limit{--c:var(--limit)}
+.sign.no{--c:var(--no)}
+.sign.permit{--c:var(--permit)}
+.sign.unknown{--c:var(--unknown)}
+.sign .word{display:block;font-size:2.6rem;line-height:1;font-weight:800;letter-spacing:-.03em}
 .sign p{margin:8px 0 0}
-.box{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:8px}
-.warn{border-left:6px solid #a35f00}
-.rule span,.small{color:var(--mute);font-size:14px}
-.small{margin-top:18px}
+.facts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.facts div,.box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.facts span{display:block;color:var(--mute);font-size:.78rem;font-weight:650;text-transform:uppercase;letter-spacing:.03em}
+.facts b{display:block;margin-top:2px;font-size:1rem}
+.warn{border-left:6px solid var(--limit)}
+.day{margin-top:10px}
+.day h3{margin:0 0 6px;font-size:1rem}
+.bar{display:flex;height:14px;border-radius:999px;overflow:hidden;background:var(--line)}
+.bar i{display:block;height:100%}
+.bar i.ok{background:var(--yes)}.bar i.limit{background:#c47b12}.bar i.no{background:var(--no)}
+.bar i.permit{background:var(--permit)}.bar i.unknown{background:#8b98a6}
+.segs{list-style:none;padding:0;margin:8px 0 0}
+.segs li{display:flex;gap:8px;align-items:baseline;padding:4px 0;border-top:1px solid var(--line);font-size:.95rem}
+.tag{flex:0 0 auto;font-size:.72rem;font-weight:800;letter-spacing:.03em;text-transform:uppercase;color:#fff;border-radius:999px;padding:2px 6px}
+.tag.ok{background:var(--yes)}.tag.limit{background:#c47b12}.tag.no{background:var(--no)}
+.tag.permit{background:var(--permit)}.tag.unknown{background:#8b98a6}
+.count{font-size:3.2rem;font-weight:800;letter-spacing:-.04em;margin:4px 0;font-variant-numeric:tabular-nums}
+.alarm{position:sticky;bottom:0;margin-top:12px;background:var(--no);color:#fff;border-radius:14px;padding:14px}
+.alarm button{background:#fff;color:var(--no);margin-top:8px}
+.small{color:var(--mute);font-size:.85rem;margin-top:16px}
+.filecam{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
+.map{position:relative;height:160px;margin-top:10px;background:var(--card);border:1px solid var(--line);border-radius:12px}
+.map i,.map b{position:absolute;width:12px;height:12px;border-radius:50%;transform:translate(-50%,-50%)}
+.map i{background:var(--yes)}.map b{background:var(--permit);width:14px;height:14px}
+.spots{list-style:none;padding:0;margin:8px 0 0}
+.spots li{padding:8px 0;border-top:1px solid var(--line)}
+.spots a{font-weight:700}
+.code,input.code{font-family:ui-monospace,Menlo,monospace;font-size:.9rem;word-break:break-all}
+.checkline{display:flex;gap:8px;align-items:center}
+.checkline input{width:auto}
 </style>
 </head>
 <body>
 <main>
+<p class="eyebrow">Los Angeles</p>
 <h1>Can I park here?</h1>
-<button id="go" type="button">Find my spot</button>
-<label for="addr" style="display:block;margin:16px 0 4px;color:var(--mute);font-size:14px">Or check an address</label>
-<input id="addr" type="text" placeholder="201 3rd St, Los Angeles" autocomplete="street-address" style="width:100%;font:inherit;color:var(--ink);background:var(--card);border:1.5px solid var(--line);border-radius:8px;padding:12px">
+<p class="hint">At the curb, check the spot. After you park, the app tells you when to move.</p>
+<button id="go" type="button">Check this spot</button>
+<details>
+<summary>Or type an address</summary>
+<label for="addr">Address in Los Angeles</label>
+<input id="addr" type="text" placeholder="201 3rd St, Los Angeles" autocomplete="street-address" enterkeyhint="search">
 <button id="addrgo" class="alt" type="button">Check address</button>
-<button id="again" class="alt" type="button" hidden>Check again</button>
+</details>
+<details>
+<summary>iPhone alarm setup</summary>
+<ol>
+<li>Open this page in <strong>Safari</strong> (not Chrome).</li>
+<li>Tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>.</li>
+<li>Open <strong>Park LA</strong> from your home screen.</li>
+<li>After you park, tap <strong>Add to Calendar</strong>. That alarm rings even if notifications are off.</li>
+<li>Tap <strong>Allow iPhone alerts</strong> and choose Allow. Needs iOS 16.4 or newer, and the home-screen app.</li>
+</ol>
+<p class="hint">The beep works only while this page is open and the screen is on. A locked iPhone needs the calendar alarm or a notification.</p>
+</details>
+<button id="autosetup" class="alt" type="button">Set up auto-park</button>
+<button id="alertsettings" class="alt" type="button">Alert times</button>
+<button id="permits" class="alt" type="button">My permit districts</button>
+<button id="holidays" class="alt" type="button">City holidays</button>
+<button id="tickethelp" class="alt" type="button">Ticket or tow</button>
 <div id="out" aria-live="polite"></div>
 </main>
 <script>
-var go=document.getElementById("go"),again=document.getElementById("again"),out=document.getElementById("out");
-function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
-function say(t){out.innerHTML='<div class="box">'+esc(t)+'</div>'}
-function show(d){
- var cls={ok:"ok",limit:"limit",permit:"permit",no:"no"}[d.status]||"unknown";
- var h='<div class="sign '+cls+'"><b>'+esc(d.headline)+'</b>';
- if(d.searched)h+='<p>Searched near: '+esc(d.searched)+'</p>';
- if(d.address)h+='<p>Nearest meter: '+esc(d.address)+'</p>';
- h+='</div>';
- (d.warnings||[]).forEach(function(w){h+='<div class="box warn">'+esc(w)+'</div>'});
- if(d.confidence==="low")h+='<div class="box warn">Low confidence: the city data has a time limit but not when it is enforced.</div>';
- if(d.rules&&d.rules.length){h+='<h2>Rules found</h2>';d.rules.forEach(function(r){
-  h+='<div class="box rule"><strong>'+esc(r.label)+'</strong><br><span>'+esc(r.source)+'</span></div>'})}
- h+='<p class="small">'+esc(d.coverage||"")+' '+esc(d.disclaimer||"")+'</p>';
- out.innerHTML=h}
-function check(){
- go.disabled=true;again.hidden=true;say("Finding your location…");
- if(!navigator.geolocation){say("This browser can’t share your location.");go.disabled=false;return}
- navigator.geolocation.getCurrentPosition(function(p){
-  say("Checking the rules. The first check can take up to a minute while the server wakes up…");
-  fetch("/check?lat="+p.coords.latitude+"&lng="+p.coords.longitude)
-   .then(function(r){if(!r.ok)throw 0;return r.json()})
-   .then(function(d){show(d);go.disabled=false;go.textContent="Find my spot";again.hidden=false})
-   .catch(function(){say("Couldn’t reach the server. Try again in a moment.");go.disabled=false})
- },function(){say("Location is off or blocked. In Settings, allow location for Safari websites, then try again.");go.disabled=false},
- {enableHighAccuracy:true,timeout:15000})}
-function byAddress(){var a=document.getElementById("addr").value.trim();if(!a){say("Type an address first.");return}
- say("Checking the rules. The first check can take up to a minute while the server wakes up…");
- fetch("/check?address="+encodeURIComponent(a)).then(function(r){if(!r.ok)throw 0;return r.json()})
-  .then(function(d){show(d);again.hidden=true})
-  .catch(function(){say("Couldn’t reach the server. Try again in a moment.")})}
-document.getElementById("addrgo").addEventListener("click",byAddress);
-go.addEventListener("click",check);again.addEventListener("click",check);
+var out = document.getElementById("out");
+var go = document.getElementById("go");
+var spot = null;
+var signPhotos = [];
+var scanId = null;
+var timers = [];
+var nag = null;
+var audioCtx = null;
+var KEY = "la-park-v1";
+
+function esc(s){return String(s == null ? "" : s).replace(/[&<>"]/g, function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function say(t){out.innerHTML = '<div class="box">'+esc(t)+'</div>'}
+function fmtMin(m){
+  var h24 = Math.floor((m % 1440) / 60), mi = m % 60, ap = h24 < 12 ? "AM" : "PM", h = h24 % 12 || 12;
+  return h + ":" + (mi < 10 ? "0" : "") + mi + " " + ap;
+}
+function fmtDate(iso){
+  var p = iso.split("-");
+  return new Date(Date.UTC(+p[0], +p[1]-1, +p[2])).toLocaleDateString("en-US", {weekday:"short", month:"short", day:"numeric", timeZone:"UTC"});
+}
+function tag(status){return {ok:"OK", limit:"Limit", no:"No", permit:"Permit", unknown:"?"}[status] || status}
+function standalone(){return navigator.standalone === true || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)}
+function unlock(){
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch (e) {}
+}
+var ALERT_DEFAULTS = {lead1:15, lead2:5, repeat:3, repeatFor:15, nightHour:20, morningHour:7, earlyBefore:10, snooze:10};
+var lastBeep = 0;
+function loadSettings(){
+  var o = {}, saved = {};
+  try { saved = JSON.parse(localStorage.getItem("la-alert-settings") || "{}") || {}; } catch (e) {}
+  for (var k in ALERT_DEFAULTS) o[k] = saved[k] != null ? saved[k] : ALERT_DEFAULTS[k];
+  if (!(o.lead2 < o.lead1)) o.lead2 = Math.min(o.lead2, Math.max(1, o.lead1 - 1));
+  return o;
+}
+function settingsPayload(s){
+  return {lead_minutes:[+s.lead1, +s.lead2], repeat_minutes:+s.repeat, repeat_for_minutes:+s.repeatFor,
+    night_hour:+s.nightHour, morning_hour:+s.morningHour, early_before_hour:+s.earlyBefore, snooze_minutes:+s.snooze};
+}
+function beep(urgent){
+  if (Date.now() - lastBeep < 4000) return;
+  lastBeep = Date.now();
+  unlock();
+  if (!audioCtx) return;
+  function tone(freq, at, dur, gain){
+    var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = urgent ? "sawtooth" : "sine";
+    o.frequency.value = freq; o.connect(g); g.connect(audioCtx.destination);
+    var t = audioCtx.currentTime + at;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.start(t); o.stop(t + dur + 0.02);
+  }
+  if (urgent) {
+    tone(520, 0, 0.28, 0.55); tone(780, 0.3, 0.28, 0.55); tone(520, 0.6, 0.28, 0.55);
+    tone(980, 0.95, 0.45, 0.6);
+    if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 700]);
+  } else {
+    tone(880, 0, 0.22, 0.3); tone(880, 0.32, 0.22, 0.3); tone(988, 0.64, 0.4, 0.35);
+    if (navigator.vibrate) navigator.vibrate([180, 80, 180, 80, 360]);
+  }
+}
+function clearTimers(){timers.forEach(clearTimeout); timers = []; if (nag){clearInterval(nag); nag = null}}
+function checkedDays(name){
+  return Array.prototype.map.call(document.querySelectorAll('input[name="'+name+'"]:checked'), function(el){return +el.value})
+}
+function readWindows(prefix){
+  var rows = [];
+  document.querySelectorAll('[data-window="'+prefix+'"]').forEach(function(row){
+    var days = checkedDays(row.getAttribute("data-days"));
+    var start = row.querySelector(".wstart").value, end = row.querySelector(".wend").value;
+    if (!start && !end) return;
+    if (!days.length || !start || !end) throw new Error("Add the days and both hours from the sign.");
+    rows.push({days: days, start: toMin(start), end: toMin(end)});
+  });
+  return rows;
+}
+function toMin(v){var p = v.split(":"); return (+p[0])*60 + (+p[1])}
+function readSign(){
+  var sign = {}, lim = document.getElementById("limit").value;
+  if (lim !== "") sign.time_limit_min = +lim;
+  var ls = document.getElementById("lstart").value, le = document.getElementById("lend").value;
+  if (ls) sign.limit_start = toMin(ls);
+  if (le) sign.limit_end = toMin(le);
+  var days = checkedDays("limit-days");
+  if (days.length) sign.limit_days = days;
+  var rate = document.getElementById("rate").value.trim();
+  if (rate) sign.rate = rate;
+  sign.sweeping = readWindows("sweep");
+  sign.tow = readWindows("tow");
+  sign.permit = readWindows("permit");
+  sign.red_curb = document.getElementById("red").checked;
+  sign.holidays_enforced = document.getElementById("holen").checked;
+  var used = lim !== "" || sign.sweeping.length || sign.tow.length || sign.permit.length || sign.red_curb;
+  return used ? sign : null;
+}
+function dayChecks(name, selected){
+  var names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  return names.map(function(n, i){
+    var on = selected.indexOf(i) >= 0 ? " checked" : "";
+    return '<label><input type="checkbox" name="'+name+'" value="'+i+'"'+on+'>'+n+'</label>';
+  }).join("");
+}
+function windowRow(prefix, daysName, days){
+  return '<div class="box" data-window="'+prefix+'" data-days="'+daysName+'"><div class="chips">'+dayChecks(daysName, days)+
+    '</div><div class="row"><label>From<input class="wstart" type="time"></label><label>To<input class="wend" type="time"></label></div></div>';
+}
+function show(d, gpsNote){
+  spot = d;
+  var cls = {ok:"ok", limit:"limit", permit:"permit", no:"no"}[d.status] || "unknown";
+  var h = '<div class="sign '+cls+'" id="answer" tabindex="-1"><span class="word">'+esc(d.answer_word || "Unknown")+'</span>';
+  h += '<p>'+esc(d.headline || "")+'</p>';
+  if (d.status === "no" || d.status === "permit") {
+    h += '<p>'+(d.restriction_until_text ? "Until "+esc(d.restriction_until_text)+"." : "This restriction does not lift in the next week.")+'</p>';
+  } else if (d.move_by_text && d.move_by_text !== "Not in the data") {
+    h += '<p>Move by '+esc(d.move_by_text)+'.</p>';
+  }
+  if (d.segment) h += '<p>Curb: '+esc(d.segment)+(d.space_id ? " · space "+esc(d.space_id) : "")+'</p>';
+  if (d.distance_m != null) h += '<p>'+(d.distance_m < 8 ? "You are at this meter." : "About "+esc(d.distance_m)+" m from this meter.")+'</p>';
+  if (d.searched) h += '<p>Searched near '+esc(d.searched)+'.</p>';
+  h += '</div>';
+  var facts = d.facts || {};
+  h += '<div class="facts"><div><span>Time limit</span><b>'+esc(facts.time_limit || "Not in the city data")+'</b></div>';
+  h += '<div><span>Meter</span><b>'+esc(facts.meter || "No meter nearby")+'</b></div></div>';
+  if (d.lat != null) {
+    if (d.status === "permit") {
+      h += '<button id="have" type="button">I have the permit — check again</button>';
+      h += '<button id="park" class="alt" type="button">I don’t — alarm now</button>';
+    } else if (d.status === "no") {
+      h += '<button id="park" type="button">I’m already parked — alarm now</button>';
+    } else {
+      h += '<button id="park" type="button">I parked here</button>';
+    }
+    h += '<button id="nearby" class="alt" type="button">Find a legal spot nearby</button>';
+    h += '<div id="nearbybox"></div>';
+  }
+  if (gpsNote) h += '<div class="box warn">'+esc(gpsNote)+'</div>';
+  if (d.reports && d.reports.length) {
+    h += '<h2>Nearby reports</h2>';
+    d.reports.forEach(function(r){
+      h += '<div class="box"><b>'+esc(reportLabel(r.kind))+'</b><p>'+esc(r.note || "")+'</p><p class="hint">'+esc(r.distance_m)+' m · '+esc(r.confirms)+' confirm'+(r.confirms === 1 ? "" : "s")+' · until '+esc(r.expires)+'</p>';
+      h += '<button type="button" class="alt" data-confirm="'+esc(r.id)+'">Still true</button></div>';
+    });
+  }
+  (d.warnings || []).forEach(function(w){h += '<div class="box warn">'+esc(w)+'</div>'});
+  (d.gaps || []).forEach(function(g){h += '<div class="box">'+esc(g.text)+'</div>'});
+  if (d.timeline && d.timeline.length){
+    h += '<h2>Today and the next days</h2>';
+    d.timeline.forEach(function(day){
+      h += '<section class="day box"><h3>'+esc(fmtDate(day.date));
+      if (day.holiday) h += ' · '+esc(day.holiday);
+      else if (day.sweep_holiday && day.sweep_holiday !== day.holiday) h += ' · '+esc(day.sweep_holiday);
+      h += '</h3><div class="bar" aria-hidden="true">';
+      (day.segments || []).forEach(function(s){
+        h += '<i class="'+esc(s.status)+'" style="width:'+((s.end_min-s.start_min)/14.4)+'%"></i>';
+      });
+      h += '</div><ul class="segs">';
+      (day.segments || []).forEach(function(s){
+        h += '<li><span class="tag '+esc(s.status)+'">'+esc(tag(s.status))+'</span><span>'+
+          esc(fmtMin(s.start_min))+' – '+esc(fmtMin(s.end_min))+' · '+esc(s.label)+'</span></li>';
+      });
+      h += '</ul></section>';
+    });
+  }
+  h += '<details><summary>Report this block</summary>';
+  h += '<p class="hint">Temporary no-parking is treated as a ban until it expires. Broken meters and enforcement are shown, not used as a ban.</p>';
+  h += '<label for="reportnote">Note, optional</label><input id="reportnote" type="text" maxlength="240" placeholder="Film crew, posted until 6 PM">';
+  h += '<button id="rep-temp" class="alt" type="button">Temporary no-parking</button>';
+  h += '<button id="rep-meter" class="alt" type="button">Broken meter</button>';
+  h += '<button id="rep-tow" class="alt" type="button">Enforcement or tow truck</button>';
+  h += '<p id="reportmsg" class="hint"></p></details>';
+  h += '<label class="btn" for="scanfile">Scan sign</label>';
+  h += '<input id="scanfile" class="filecam" type="file" accept="image/*" capture="environment" aria-label="Photograph the parking sign">';
+  h += '<p id="scanhint" class="hint"></p><div id="scanread"></div>';
+  h += signForm(d);
+  h += '<p class="small">'+esc(d.coverage || "")+' '+esc(d.disclaimer || "")+'</p>';
+  if (d.sources && d.sources.length){
+    h += '<details><summary>Where this comes from</summary><ul>';
+    d.sources.forEach(function(s){h += '<li><a href="'+esc(s.url)+'">'+esc(s.name)+'</a></li>'});
+    h += '</ul></details>';
+  }
+  out.innerHTML = h;
+  var answer = document.getElementById("answer");
+  if (answer) answer.focus();
+  var park = document.getElementById("park");
+  if (park) park.addEventListener("click", function(){savePark(false)});
+  var have = document.getElementById("have");
+  if (have) have.addEventListener("click", function(){savePermitName(spot.permit_district); recheck(true)});
+  var nearby = document.getElementById("nearby");
+  if (nearby) nearby.addEventListener("click", findNearby);
+  [["rep-temp","temp_no_parking"],["rep-meter","broken_meter"],["rep-tow","enforcement"]].forEach(function(pair){
+    var btn = document.getElementById(pair[0]);
+    if (btn) btn.addEventListener("click", function(){sendReport(pair[1])});
+  });
+  document.querySelectorAll("[data-confirm]").forEach(function(btn){
+    btn.addEventListener("click", function(){confirmReport(btn.getAttribute("data-confirm"), btn)});
+  });
+  document.getElementById("apply").addEventListener("click", function(){recheck(false)});
+  var file = document.getElementById("scanfile");
+  if (file) file.addEventListener("change", function(){
+    var picked = file.files && file.files[0];
+    file.value = "";
+    if (!picked) return;
+    shrinkPhoto(picked).then(function(url){
+      signPhotos.push(url);
+      var hint = document.getElementById("scanhint");
+      if (hint) hint.textContent = signPhotos.length + (signPhotos.length === 1 ? " photo." : " photos.") + " Add another stacked sign, or read them.";
+      if (!document.getElementById("readsigns")) {
+        var box = document.getElementById("scanread");
+        if (!box) return;
+        box.innerHTML = '<button id="readsigns" type="button">Read sign</button>';
+        document.getElementById("readsigns").addEventListener("click", readSigns);
+      }
+    });
+  });
+}
+function fromMin(m){
+  if (m == null || m === "") return "";
+  var h = Math.floor(m / 60), mi = m % 60;
+  return (h < 10 ? "0" : "") + h + ":" + (mi < 10 ? "0" : "") + mi;
+}
+function setDays(name, days){
+  document.querySelectorAll('input[name="'+name+'"]').forEach(function(el){el.checked = days.indexOf(+el.value) >= 0});
+}
+function setWindow(prefix, daysName, window, index){
+  var rows = document.querySelectorAll('[data-window="'+prefix+'"]');
+  var row = rows[index || 0];
+  if (!row || !window) return;
+  setDays(daysName, window.days || []);
+  var start = row.querySelector(".wstart"), end = row.querySelector(".wend");
+  if (start) start.value = fromMin(window.start);
+  if (end) end.value = fromMin(window.end);
+}
+function fillSignForm(sign){
+  var box = document.getElementById("signbox");
+  if (box) box.open = true;
+  var limit = document.getElementById("limit");
+  if (limit && sign.time_limit_min != null) {
+    var value = String(sign.time_limit_min);
+    if (![].some.call(limit.options, function(o){return o.value === value})) {
+      var opt = document.createElement("option");
+      opt.value = value; opt.textContent = value + " minutes";
+      limit.appendChild(opt);
+    }
+    limit.value = value;
+  }
+  if (sign.limit_days) setDays("limit-days", sign.limit_days);
+  var ls = document.getElementById("lstart"), le = document.getElementById("lend");
+  if (ls && sign.limit_start != null) ls.value = fromMin(sign.limit_start);
+  if (le && sign.limit_end != null) le.value = fromMin(sign.limit_end);
+  var rate = document.getElementById("rate");
+  if (rate && sign.rate) rate.value = sign.rate;
+  if (sign.sweeping && sign.sweeping[0]) setWindow("sweep", "sweep-days", sign.sweeping[0]);
+  if (sign.tow && sign.tow[0]) setWindow("tow", "tow-days-1", sign.tow[0], 0);
+  if (sign.tow && sign.tow[1]) setWindow("tow", "tow-days-2", sign.tow[1], 1);
+  if (sign.permit && sign.permit[0]) setWindow("permit", "permit-days", sign.permit[0]);
+  var red = document.getElementById("red");
+  if (red) red.checked = !!sign.red_curb;
+  var hol = document.getElementById("holen");
+  if (hol) hol.checked = !!sign.holidays_enforced;
+}
+function shrinkPhoto(file){
+  return new Promise(function(resolve){
+    var img = new Image();
+    img.onload = function(){
+      var max = 1600, scale = Math.min(1, max / Math.max(img.width, img.height));
+      var canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(img.src);
+      resolve(canvas.toDataURL("image/jpeg", 0.8));
+    };
+    img.onerror = function(){resolve("")};
+    img.src = URL.createObjectURL(file);
+  });
+}
+function readSigns(){
+  if (!signPhotos.length || !spot) return;
+  var box = document.getElementById("scanread");
+  if (box) box.innerHTML = '<div class="box">Reading the sign…</div>';
+  fetch("/api/sign", {method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({images: signPhotos, lat: spot.lat, lng: spot.lng})})
+    .then(function(r){if(!r.ok) throw 0; return r.json()})
+    .then(function(d){
+      scanId = d.scan_id || scanId;
+      var html = "";
+      if (d.message) html += '<div class="box warn">'+esc(d.message)+'</div>';
+      (d.summary || []).forEach(function(line){html += '<div class="box"><strong>'+esc(line)+'</strong></div>'});
+      (d.conflicts || []).forEach(function(line){html += '<div class="box warn">'+esc(line)+'</div>'});
+      if (d.text) html += '<details><summary>Words read from the photo</summary><p>'+esc(d.text)+'</p></details>';
+      html += '<p class="hint">Check this, edit anything wrong, then tap Use this sign. The photo is saved with the spot when you park.</p>';
+      if (box) box.innerHTML = html;
+      if (d.sign && (d.summary || []).length) fillSignForm(d.sign);
+      else {var details = document.getElementById("signbox"); if (details) details.open = true}
+    })
+    .catch(function(){if (box) box.innerHTML = '<div class="box warn">Couldn’t send the photo. Type what the sign says.</div>'});
+}
+function signForm(d){
+  var open = d.status === "unknown" ? " open" : "";
+  return '<details id="signbox"'+open+'><summary>What does the sign say?</summary>'+
+    '<label for="limit">Time limit</label><select id="limit"><option value="">Not sure</option><option value="0">No time limit</option>'+
+    '<option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option>'+
+    '<option value="120">2 hours</option><option value="240">4 hours</option></select>'+
+    '<p class="hint">Days the limit is enforced. Leave them blank for every day.</p><div class="chips">'+dayChecks("limit-days", [])+'</div>'+
+    '<div class="row"><label>From<input id="lstart" type="time"></label><label>To<input id="lend" type="time"></label></div>'+
+    '<label for="rate">Meter price, if you can see it</label><input id="rate" type="text" inputmode="decimal" placeholder="$1.50 per hour">'+
+    '<h2>Street sweeping</h2>'+windowRow("sweep", "sweep-days", [])+
+    '<h2>Tow-away or rush hour</h2><p class="hint">Many signs have a morning window and an evening window.</p>'+
+    windowRow("tow", "tow-days-1", [0,1,2,3,4])+windowRow("tow", "tow-days-2", [0,1,2,3,4])+
+    '<h2>Permit hours</h2>'+windowRow("permit", "permit-days", [0,1,2,3,4,5,6])+
+    '<label class="checkline"><input id="red" type="checkbox"> Red curb, or no parking at any time</label>'+
+    '<label class="checkline"><input id="holen" type="checkbox"> The sign says holidays are enforced</label>'+
+    '<button id="apply" class="alt" type="button">Use this sign</button></details>';
+}
+function payload(hasPermit){
+  var sign = null;
+  try { sign = readSign(); } catch (e) { window.alert(e.message); return null; }
+  var body = {lat: spot.lat, lng: spot.lng, sign: sign, has_permit: !!hasPermit, permits: savedPermits()};
+  if (spot.searched) body.address = document.getElementById("addr").value.trim();
+  return body;
+}
+function recheck(hasPermit){
+  var body = payload(hasPermit);
+  if (!body) return;
+  say("Checking again…");
+  fetch("/check", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)})
+    .then(function(r){if(!r.ok) throw 0; return r.json()})
+    .then(function(d){d.lat = body.lat; d.lng = body.lng; show(d)})
+    .catch(function(){say("Couldn’t reach the server. Try again in a moment.")});
+}
+function savePark(){
+  unlock();
+  var body = payload(false);
+  if (!body) return;
+  say("Saving this spot…");
+  var sub = null;
+  try { sub = JSON.parse(localStorage.getItem("la-park-sub") || "null"); } catch (e) {}
+  if (sub) body.subscription = sub;
+  body.settings = settingsPayload(loadSettings());
+  if (scanId) body.scan_id = scanId;
+  fetch("/park", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)})
+    .then(function(r){if(!r.ok) throw 0; return r.json()})
+    .then(function(d){
+      var saved = {id:d.id, alarm_at:d.alarm_at, reason:d.reason, headline:d.headline, address:d.address || d.segment,
+        lat:body.lat, lng:body.lng, sign:body.sign, has_permit:body.has_permit, reminders:d.reminders || [],
+        meter: !!spot.meter_used, space_id: spot.space_id || ""};
+      localStorage.setItem(KEY, JSON.stringify(saved));
+      showParked(saved);
+    })
+    .catch(function(){say("Couldn’t save the spot. Try again in a moment.")});
+}
+function showParked(saved){
+  clearTimers();
+  var when = saved.alarm_at ? new Date(saved.alarm_at) : null;
+  var h = '<section class="box" id="parked"><p class="eyebrow">Parked'+(saved.address ? " · "+esc(saved.address) : "")+'</p>';
+  if (!when) {
+    h += '<p class="count">No deadline</p><p>The city data has no time to move the car. Enter what the sign says, then park again.</p>';
+  } else {
+    h += '<p class="eyebrow">Move the car in</p><p class="count" id="count">–</p><p id="countwhy">'+esc(saved.reason || saved.headline || "")+'</p>';
+  }
+  if (when) {
+    h += '<a class="btn" id="ics" href="/park/'+esc(saved.id)+'.ics">Add to Calendar</a>';
+    var prefs = loadSettings();
+    h += '<p class="hint">Calendar alarms: '+esc(prefs.lead1)+' minutes before, '+esc(prefs.lead2)+' minutes before, and at the deadline. This still rings if the server is asleep.</p>';
+  }
+  if (saved.lat != null && saved.lng != null) {
+    h += '<p>Saved pin '+esc(Number(saved.lat).toFixed(5))+', '+esc(Number(saved.lng).toFixed(5))+'</p>';
+    h += '<a class="btn" href="https://maps.apple.com/?daddr='+encodeURIComponent(saved.lat+","+saved.lng)+'&dirflg=w">Directions</a>';
+  }
+  if (saved.meter) {
+    h += '<label for="zone">Zone number on the meter sticker</label><input id="zone" inputmode="numeric" placeholder="17126">';
+    h += '<button id="payopen" type="button">Pay the meter</button><div id="paylinks"></div>';
+    h += '<label for="paiduntil">Paid until</label><input id="paiduntil" type="datetime-local">';
+    h += '<button id="paidgo" class="alt" type="button">Update the alarm</button>';
+    h += '<p class="hint">A sweeping or tow-away deadline that is sooner than the payment stays in place.</p>';
+  }
+  h += '<a class="btn alt" href="/park/'+esc(saved.id)+'/evidence">Export evidence</a>';
+  h += '<div id="helplinks"></div>';
+  h += '<button id="push" class="alt" type="button">Allow iPhone alerts</button>';
+  h += '<p id="pushmsg" class="hint"></p>';
+  h += '<button id="silence" class="alt" type="button" hidden>Silence the beep</button>';
+  h += '<button id="snooze" class="alt" type="button">Snooze</button>';
+  h += '<button id="moved" class="alt" type="button">I moved it</button>';
+  h += '<div id="banner"></div></section>';
+  out.innerHTML = h;
+  var ics = document.getElementById("ics");
+  if (ics) ics.addEventListener("click", unlock);
+  var payopen = document.getElementById("payopen");
+  if (payopen) payopen.addEventListener("click", function(){openPay(saved)});
+  var paidgo = document.getElementById("paidgo");
+  if (paidgo) paidgo.addEventListener("click", function(){updatePaid(saved)});
+  loadHelp();
+  document.getElementById("push").addEventListener("click", enablePush);
+  document.getElementById("moved").addEventListener("click", moved);
+  document.getElementById("snooze").addEventListener("click", function(){snooze(saved)});
+  document.getElementById("silence").addEventListener("click", function(){clearTimers(); this.hidden = true});
+  if (!when) return;
+  function fire(kind, level){
+    var urgent = level === "final" || kind === "now" || kind === "repeat";
+    var banner = document.getElementById("banner");
+    var text = urgent ? "Move the car now." : (kind === "night" ? "Move the car tomorrow." : kind === "morning" ? "Move the car this morning." : "Move the car in "+kind+" minutes.");
+    if (banner) banner.innerHTML = '<div class="alarm" role="alert"><strong>'+esc(text)+'</strong><p>'+esc(saved.reason || "")+'</p></div>';
+    var silence = document.getElementById("silence");
+    if (silence) silence.hidden = false;
+    beep(urgent);
+    if (urgent) startNag(saved);
+  }
+  function tick(){
+    var el = document.getElementById("count");
+    if (!el) return;
+    var ms = when.getTime() - Date.now();
+    if (ms <= 0) { el.textContent = "Now"; document.title = "Move the car now"; return; }
+    var s = Math.floor(ms / 1000), hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
+    var pad = function(n){return (n < 10 ? "0" : "") + n};
+    el.textContent = (hh ? hh + ":" : "") + pad(mm) + ":" + pad(ss);
+    document.title = el.textContent + " · Move car";
+  }
+  tick();
+  timers.push(setInterval(tick, 1000));
+  var planned = saved.reminders && saved.reminders.length ? saved.reminders : [
+    {at: new Date(when.getTime() - loadSettings().lead1 * 60000).toISOString(), kind: String(loadSettings().lead1), level: "soon"},
+    {at: new Date(when.getTime() - loadSettings().lead2 * 60000).toISOString(), kind: String(loadSettings().lead2), level: "soon"},
+    {at: when.toISOString(), kind: "now", level: "final"}
+  ];
+  planned.forEach(function(r){
+    var delay = new Date(r.at).getTime() - Date.now();
+    if (delay < -20000) return;
+    if (delay < 0) delay = 0;
+    timers.push(setTimeout(function(){fire(r.kind, r.level)}, delay));
+  });
+}
+function startNag(saved){
+  if (nag || !saved.alarm_at) return;
+  var prefs = loadSettings();
+  var until = new Date(saved.alarm_at).getTime() + prefs.repeatFor * 60000;
+  nag = setInterval(function(){
+    if (Date.now() > until) { clearInterval(nag); nag = null; return; }
+    beep(true);
+    var banner = document.getElementById("banner");
+    if (banner) banner.innerHTML = '<div class="alarm" role="alert"><strong>Still there — move the car.</strong><p>'+esc(saved.reason || "")+'</p></div>';
+  }, Math.max(1, prefs.repeat) * 60000);
+}
+function snooze(saved){
+  if (nag) { clearInterval(nag); nag = null; }
+  var prefs = loadSettings();
+  fetch("/park/"+saved.id+"/snooze", {method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({minutes: prefs.snooze})})
+    .then(function(r){return r.json()}).then(function(d){
+      var banner = document.getElementById("banner");
+      if (banner) banner.innerHTML = '<div class="box">Snoozed for '+esc(prefs.snooze)+' minutes.</div>';
+      if (d && d.snooze_until) {
+        var delay = new Date(d.snooze_until).getTime() - Date.now();
+        if (delay < 0) delay = 0;
+        timers.push(setTimeout(function(){ beep(true); startNag(saved); }, delay));
+      }
+    }).catch(function(){});
+}
+function moved(){
+  clearTimers();
+  document.title = "Can I park here?";
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
+  localStorage.removeItem(KEY);
+  if (saved && saved.id) fetch("/park/"+saved.id+"/cancel", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+  say("Cleared. Check the next spot when you park again.");
+}
+function enablePush(){
+  unlock();
+  var ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  var safari = /Safari/.test(navigator.userAgent) && !/CriOS|FxiOS|EdgiOS/.test(navigator.userAgent);
+  function pushNote(t){var el = document.getElementById("pushmsg"); if (el) el.textContent = t; else say(t)}
+  if (ios && !safari && !standalone()) { pushNote("Open this page in Safari, then use Share → Add to Home Screen."); return; }
+  if (!standalone()) { pushNote("Add Park LA to your home screen first, open it from the icon, then allow alerts. iOS only delivers web alerts to an installed app."); return; }
+  if (!("Notification" in window) || !("PushManager" in window)) { pushNote("This iPhone can’t show web alerts. Use Add to Calendar instead."); return; }
+  Notification.requestPermission().then(function(perm){
+    if (perm !== "granted") { pushNote("Alerts are blocked. Use Add to Calendar, or turn notifications on in iPhone Settings for this app."); return; }
+    return fetch("/push/public-key").then(function(r){return r.json()}).then(function(key){
+      if (!key.publicKey) { pushNote("Alerts aren’t turned on for the server yet. Add to Calendar still works."); return; }
+      return navigator.serviceWorker.ready.then(function(reg){
+        return reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:b64ToBuf(key.publicKey)});
+      }).then(function(sub){
+        var json = sub.toJSON();
+        localStorage.setItem("la-park-sub", JSON.stringify(json));
+        var saved = JSON.parse(localStorage.getItem(KEY) || "null");
+        return fetch("/push/subscribe", {method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({subscription: json, park_id: saved && saved.id, token: localStorage.getItem("la-device-token")})});
+      }).then(function(){pushNote("Alerts are on. You’ll get a notice 15 minutes before, 5 minutes before, and at the deadline, when the server is awake.")});
+    });
+  }).catch(function(){pushNote("Couldn’t turn on alerts. Use Add to Calendar.")});
+}
+function b64ToBuf(s){
+  var pad = "=".repeat((4 - s.length % 4) % 4);
+  var b = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  var a = new Uint8Array(b.length);
+  for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+  return a;
+}
+function checkGps(){
+  signPhotos = []; scanId = null;
+  go.disabled = true;
+  say("Finding your location…");
+  if (!navigator.geolocation) { say("This browser can’t share your location. Type an address instead."); go.disabled = false; return; }
+  navigator.geolocation.getCurrentPosition(function(p){
+    var note = p.coords.accuracy > 40 ? "GPS accuracy is about "+Math.round(p.coords.accuracy)+" m. Confirm you’re on the right block." : "";
+    say("Checking Los Angeles rules. The first check can take a minute while the server wakes up…");
+    fetch(withPermits("/check?lat="+encodeURIComponent(p.coords.latitude)+"&lng="+encodeURIComponent(p.coords.longitude)))
+      .then(function(r){if(!r.ok) throw 0; return r.json()})
+      .then(function(d){d.lat = p.coords.latitude; d.lng = p.coords.longitude; show(d, note); go.disabled = false; go.textContent = "Check this spot"})
+      .catch(function(){say("Couldn’t reach the server. Try again in a moment."); go.disabled = false});
+  }, function(){
+    say("Location is off or blocked. In iPhone Settings, allow Location for Safari websites, then try again. Or type an address.");
+    go.disabled = false;
+  }, {enableHighAccuracy:true, timeout:15000, maximumAge:10000});
+}
+function byAddress(){
+  signPhotos = []; scanId = null;
+  var a = document.getElementById("addr").value.trim();
+  if (!a) { say("Type an address first."); return; }
+  say("Checking Los Angeles rules. The first check can take a minute while the server wakes up…");
+  fetch(withPermits("/check?address="+encodeURIComponent(a))).then(function(r){if(!r.ok) throw 0; return r.json()})
+    .then(function(d){
+      if (d.lat == null && d.status === "unknown") { say(d.headline || "Couldn’t find that address."); return; }
+      show(d);
+    })
+    .catch(function(){say("Couldn’t reach the server. Try again in a moment.")});
+}
+function restore(){
+  var params = new URLSearchParams(location.search);
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
+  var id = params.get("park");
+  if (id && (!saved || saved.id !== id)) {
+    fetch("/park/"+id).then(function(r){if(!r.ok) throw 0; return r.json()}).then(function(row){
+      if (!row || row.cancelled || !row.move_by) return;
+      showParked({id: row.id, alarm_at: row.move_by, reason: row.reason, headline: row.headline, address: row.address, lat: row.lat, lng: row.lng});
+    }).catch(function(){});
+    return;
+  }
+  if (!saved || !saved.alarm_at) return;
+  if (new Date(saved.alarm_at).getTime() < Date.now() - 60*60*1000) return;
+  showParked(saved);
+  fetch("/park/"+saved.id).then(function(r){
+    if (r.status !== 404) return;
+    return fetch("/park", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
+      lat: saved.lat, lng: saved.lng, sign: saved.sign, has_permit: saved.has_permit
+    })}).then(function(res){return res.json()}).then(function(d){
+      if (!d.id) return;
+      saved.id = d.id; saved.alarm_at = d.alarm_at || saved.alarm_at;
+      localStorage.setItem(KEY, JSON.stringify(saved));
+    });
+  }).catch(function(){});
+}
+function copyText(value, button){
+  function done(){if(button){var old = button.textContent; button.textContent = "Copied"; setTimeout(function(){button.textContent = old}, 1200)}}
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(value).then(done).catch(function(){fallback()});
+  } else fallback();
+  function fallback(){
+    var el = document.createElement("textarea");
+    el.value = value; document.body.appendChild(el); el.select();
+    try { document.execCommand("copy"); done(); } catch (e) {}
+    el.remove();
+  }
+}
+function showAutoSetup(){
+  say("Getting your auto-park token. The first time can take a minute while the server wakes up…");
+  var known = localStorage.getItem("la-device-token") || "";
+  var sub = null;
+  try { sub = JSON.parse(localStorage.getItem("la-park-sub") || "null"); } catch (e) {}
+  fetch("/api/device", {method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({token: known, subscription: sub})})
+    .then(function(r){if(!r.ok) throw 0; return r.json()})
+    .then(function(d){
+      localStorage.setItem("la-device-token", d.token);
+      var h = '<section class="box"><p class="eyebrow">Auto-park</p><h2>When you leave the car</h2>';
+      h += '<p>The web app cannot see Bluetooth or CarPlay. This car uses both. Build one shortcut, then add two automations that run it: CarPlay disconnects, and the car’s Bluetooth disconnects. If both fire within 3 minutes, the server keeps one parking session and one set of alarms.</p>';
+      h += '<label for="devtoken">Device token</label><input id="devtoken" class="code" readonly value="'+esc(d.token)+'">';
+      h += '<button id="copytoken" class="alt" type="button">Copy token</button>';
+      h += '<label for="devurl">Address the Shortcut calls</label><input id="devurl" class="code" readonly value="'+esc(d.autopark_url)+'">';
+      h += '<button id="copyurl" class="alt" type="button">Copy address</button>';
+      h += '<p class="hint">This token is the key for this phone. It lives in the Shortcut and on the server, not in the app’s source code. Treat it like a password.</p>';
+      h += '<h2>1. Build one shortcut</h2><ol>';
+      h += '<li>Open the <strong>Shortcuts</strong> app. Tap the <strong>Shortcuts</strong> tab (not Automation).</li>';
+      h += '<li>Tap <strong>+</strong>. Tap the name at the top and name it <strong>Park LA</strong>.</li>';
+      h += '<li>Add <strong>Get Current Location</strong>.</li>';
+      h += '<li>Add <strong>Get Contents of URL</strong>. Paste the address above. Set Method to <strong>POST</strong>. Tap <strong>Show More</strong> if you need the rest of the fields.</li>';
+      h += '<li>Under Headers, add <strong>Content-Type</strong> with value <strong>application/json</strong>.</li>';
+      h += '<li>Request Body: <strong>JSON</strong>. Add <strong>token</strong> (Text) and paste the token. Add <strong>lat</strong> (Number) and choose <strong>Latitude</strong> from Get Current Location. Add <strong>lng</strong> (Number) and choose <strong>Longitude</strong>.</li>';
+      h += '<li>Add <strong>Get Dictionary from Input</strong> (Contents of URL), then <strong>Get Dictionary Value</strong> with key <strong>message</strong>.</li>';
+      h += '<li>Add <strong>Show Notification</strong>. Title: Parked. Body: the Dictionary Value. Tap <strong>Done</strong>.</li></ol>';
+      h += '<h2>2. CarPlay automation</h2><ol>';
+      h += '<li>Tap the <strong>Automation</strong> tab, then <strong>+</strong>, then <strong>Create Personal Automation</strong>.</li>';
+      h += '<li>Tap <strong>CarPlay</strong>, then <strong>Disconnects</strong>.</li>';
+      h += '<li>Turn off <strong>Ask Before Running</strong>. If the choice is <strong>Run Immediately</strong>, pick that.</li>';
+      h += '<li>Tap <strong>Next</strong>. Add <strong>Run Shortcut</strong> and choose <strong>Park LA</strong>. Tap <strong>Done</strong>.</li></ol>';
+      h += '<h2>3. Bluetooth automation</h2><ol>';
+      h += '<li>Tap <strong>+</strong> again, then <strong>Create Personal Automation</strong>.</li>';
+      h += '<li>Tap <strong>Bluetooth</strong>, tap <strong>Choose</strong>, pick the car (the name that shows while the phone is in the car), and choose <strong>Is Disconnected</strong>.</li>';
+      h += '<li>Turn off <strong>Ask Before Running</strong> when that switch is there.</li>';
+      h += '<li>Tap <strong>Next</strong>. Add <strong>Run Shortcut</strong> and choose <strong>Park LA</strong>. Tap <strong>Done</strong>.</li></ol>';
+      h += '<p>The notification says “Parked at …, move by …”. If alerts are on for the home-screen app, the server sends that same line as a push. The 15-minute, 5-minute, and deadline alarms are scheduled once.</p>';
+      h += '<p class="hint">CarPlay Disconnects can run with the phone locked. Apple sometimes still asks before the Bluetooth automation runs. If that switch cannot be turned off, tap the Shortcuts banner once when you park. The other automation still covers that trip.</p>';
+      h += '<p class="hint">A free Render server sleeps. The Shortcut wakes it; the first call after a long idle can take a minute. If Shortcuts says it timed out, run it once more.</p>';
+      h += '<p>Backup, if you would rather open the app: the Shortcut can <strong>Open URL</strong> <span class="code">'+esc(d.open_url)+'</span>. That page uses the token saved on this phone and the GPS. It needs the screen on. The POST above works with the phone locked.</p>';
+      h += '<button id="newtoken" class="alt" type="button">New token</button>';
+      h += '<p class="hint">A new token turns off the old Shortcut until you paste the new token into it.</p></section>';
+      out.innerHTML = h;
+      document.getElementById("copytoken").addEventListener("click", function(){copyText(d.token, this)});
+      document.getElementById("copyurl").addEventListener("click", function(){copyText(d.autopark_url, this)});
+      document.getElementById("newtoken").addEventListener("click", function(){
+        fetch("/api/device", {method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({rotate: true, token: d.token, subscription: sub})})
+          .then(function(r){return r.json()}).then(function(n){
+            localStorage.setItem("la-device-token", n.token); showAutoSetup();
+          });
+      });
+    })
+    .catch(function(){say("Couldn’t reach the server. Try again in a moment.")});
+}
+function maybeAutopark(){
+  var path = location.pathname.replace(/\/$/, "") || "/";
+  var q = new URLSearchParams(location.search);
+  if (path !== "/autopark" && q.get("autopark") !== "1") return;
+  var token = localStorage.getItem("la-device-token");
+  if (!token) { say("Open Set up auto-park on this phone once, then this link can save the spot."); return; }
+  if (!navigator.geolocation) { say("This phone can’t share location from this link. Use the Shortcut’s Get Current Location instead."); return; }
+  say("Car disconnected. Saving this spot…");
+  navigator.geolocation.getCurrentPosition(function(p){
+    fetch("/api/autopark", {method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token: token, lat: p.coords.latitude, lng: p.coords.longitude})})
+      .then(function(r){if(!r.ok) throw 0; return r.json()})
+      .then(function(d){
+        var saved = {id:d.id, alarm_at:d.alarm_at, reason:d.reason, headline:d.headline || d.message, address:d.address, lat:d.lat, lng:d.lng, reminders:d.reminders || []};
+        localStorage.setItem(KEY, JSON.stringify(saved));
+        showParked(saved);
+        var banner = document.getElementById("banner");
+        if (banner) banner.innerHTML = '<div class="box">'+esc(d.message)+'</div>';
+      })
+      .catch(function(){say("Couldn’t save the spot. In Shortcuts, check the token and that lat and lng are the location variables.")});
+  }, function(){say("Location is off. Allow Location for Safari, or send the location from the Shortcut.")},
+  {enableHighAccuracy:true, timeout:15000, maximumAge:20000});
+}
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(function(){});
+go.addEventListener("click", checkGps);
+document.getElementById("addrgo").addEventListener("click", byAddress);
+document.getElementById("addr").addEventListener("keydown", function(e){if(e.key==="Enter") byAddress()});
+function showAlertSettings(){
+  var s = loadSettings();
+  function opts(values, current){
+    return values.map(function(n){return '<option value="'+n+'"'+(String(n)===String(current)?" selected":"")+'>'+n+'</option>'}).join("");
+  }
+  var h = '<section class="box"><p class="eyebrow">Alerts</p><h2>When to warn you</h2>';
+  h += '<p>These times apply to a spot you save here and to auto-park. Sweeping and tow-away also get a night-before alert and a morning alert when the restriction starts early.</p>';
+  h += '<label for="lead1">First warning, minutes before</label><select id="lead1">'+opts([60,45,30,20,15,10], s.lead1)+'</select>';
+  h += '<label for="lead2">Second warning, minutes before</label><select id="lead2">'+opts([30,15,10,5,2,1], s.lead2)+'</select>';
+  h += '<label for="repeat">Repeat the deadline alert every</label><select id="repeat">'+opts([2,3,5,10], s.repeat)+'</select><p class="hint">Minutes. Repeats until you tap I moved it or Snooze, and stops '+esc(s.repeatFor)+' minutes after the deadline.</p>';
+  h += '<label for="repeatFor">Keep repeating after the deadline</label><select id="repeatFor">'+opts([5,15,30,60], s.repeatFor)+'</select><p class="hint">Minutes. Then the repeats stop even if you have not answered.</p>';
+  h += '<label for="nightHour">Night before sweeping or tow-away</label><select id="nightHour">'+opts([18,19,20,21], s.nightHour)+'</select><p class="hint">Hour, 24-hour clock. 20 is 8 PM.</p>';
+  h += '<label for="morningHour">Morning alert if it starts before 10 AM</label><select id="morningHour">'+opts([6,7,8], s.morningHour)+'</select>';
+  h += '<p class="hint">iPhone lock-screen alerts use the system sound. At the deadline the push is marked high priority and asks to stay on screen where the phone allows it. A louder beep plays while this page is open. iOS does not let a website choose the notification sound.</p>';
+  h += '<button id="savesettings" type="button">Save alert times</button></section>';
+  out.innerHTML = h;
+  document.getElementById("savesettings").addEventListener("click", function(){
+    var next = {lead1:+document.getElementById("lead1").value, lead2:+document.getElementById("lead2").value,
+      repeat:+document.getElementById("repeat").value, repeatFor:+document.getElementById("repeatFor").value,
+      nightHour:+document.getElementById("nightHour").value, morningHour:+document.getElementById("morningHour").value,
+      earlyBefore:10, snooze:10};
+    localStorage.setItem("la-alert-settings", JSON.stringify(next));
+    var token = localStorage.getItem("la-device-token");
+    var done = function(){say("Alert times saved. The next spot you park uses them.")};
+    if (!token) { done(); return; }
+    fetch("/api/device", {method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token: token, settings: settingsPayload(next)})}).then(done).catch(done);
+  });
+}
+function savedPermits(){
+  try { var list = JSON.parse(localStorage.getItem("la-permits") || "[]"); return Array.isArray(list) ? list : []; }
+  catch (e) { return []; }
+}
+function savePermitName(name){
+  name = String(name || "").trim();
+  if (name.length < 2) return;
+  var list = savedPermits();
+  if (list.indexOf(name) < 0) list.push(name);
+  localStorage.setItem("la-permits", JSON.stringify(list));
+}
+function withPermits(url){
+  var list = savedPermits();
+  if (!list.length) return url;
+  return url + (url.indexOf("?") >= 0 ? "&" : "?") + "permits=" + encodeURIComponent(list.join("|"));
+}
+function reportLabel(kind){
+  return {temp_no_parking:"Temporary no-parking", broken_meter:"Broken meter", enforcement:"Enforcement or tow truck"}[kind] || kind;
+}
+function ensureToken(){
+  if (localStorage.getItem("la-device-token")) return Promise.resolve(localStorage.getItem("la-device-token"));
+  return fetch("/api/device", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"}).then(function(r){
+    if (!r.ok) throw 0; return r.json();
+  }).then(function(d){localStorage.setItem("la-device-token", d.token); return d.token});
+}
+function sendReport(kind){
+  var msg = document.getElementById("reportmsg");
+  if (msg) msg.textContent = "Sending…";
+  ensureToken().then(function(token){
+    var note = document.getElementById("reportnote");
+    return fetch("/api/reports", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
+      token: token, lat: spot.lat, lng: spot.lng, kind: kind, note: note ? note.value : ""
+    })});
+  }).then(function(r){return r.json().then(function(d){return {ok:r.ok, d:d}})}).then(function(res){
+    if (msg) msg.textContent = res.ok ? "Reported until " + res.d.expires + "." : (res.d.error || "Couldn’t send the report.");
+    if (res.ok) recheck(false);
+  }).catch(function(){if (msg) msg.textContent = "Couldn’t send the report."});
+}
+function confirmReport(id, button){
+  ensureToken().then(function(token){
+    return fetch("/api/reports/"+id+"/confirm", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({token: token})});
+  }).then(function(r){return r.json()}).then(function(d){
+    if (button) button.textContent = d.confirms ? "Confirmed · " + d.confirms : "Couldn’t confirm";
+  }).catch(function(){if (button) button.textContent = "Couldn’t confirm"});
+}
+function findNearby(){
+  var box = document.getElementById("nearbybox");
+  if (!box || !spot) return;
+  box.innerHTML = '<p class="hint">Looking within a few blocks…</p>';
+  fetch("/nearby?lat="+encodeURIComponent(spot.lat)+"&lng="+encodeURIComponent(spot.lng)).then(function(r){return r.json()}).then(function(d){
+    var spots = d.spots || [];
+    if (!spots.length) { box.innerHTML = '<p class="hint">No legal curb in the city data within a few blocks. Read the signs.</p>'; return; }
+    var h = '<div class="map" aria-hidden="true">';
+    spots.forEach(function(s){
+      var x = Math.max(6, Math.min(94, 50 + (s.lng - spot.lng) / 0.004 * 42));
+      var y = Math.max(8, Math.min(92, 50 - (s.lat - spot.lat) / 0.004 * 42));
+      h += '<i style="left:'+x+'%;top:'+y+'%"></i>';
+    });
+    h += '<b style="left:50%;top:50%"></b></div><ul class="spots">';
+    spots.forEach(function(s){
+      var stay = s.stay_minutes == null ? "no end time in the data" : (s.stay_minutes >= 60 ? Math.floor(s.stay_minutes/60)+" hr "+(s.stay_minutes%60)+" min" : s.stay_minutes+" min");
+      var dir = "https://maps.apple.com/?daddr="+encodeURIComponent(s.lat+","+s.lng)+"&dirflg=w";
+      h += '<li><b>'+esc(s.address || "Curb")+'</b> · '+esc(s.distance_m)+' m · stay '+esc(stay)+'<br><a href="'+dir+'">Walk there</a></li>';
+    });
+    h += '</ul>';
+    box.innerHTML = h;
+  }).catch(function(){box.innerHTML = '<p class="hint">Couldn’t look nearby. Try again.</p>'});
+}
+function openPay(saved){
+  var zone = document.getElementById("zone");
+  var q = "zone=" + encodeURIComponent(zone ? zone.value : "") + "&space=" + encodeURIComponent(saved.space_id || "");
+  fetch("/pay?"+q).then(function(r){return r.json()}).then(function(d){
+    var box = document.getElementById("paylinks");
+    if (!box) return;
+    box.innerHTML = (d.links || []).map(function(l){return '<a class="btn" href="'+esc(l.url)+'">'+esc(l.name)+'</a>'}).join("") + '<p class="hint">'+esc(d.note || "")+'</p>';
+  });
+}
+function updatePaid(saved){
+  var input = document.getElementById("paiduntil");
+  if (!input || !input.value) { window.alert("Set the time the meter is paid until."); return; }
+  fetch("/park/"+saved.id+"/paid", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({paid_until: input.value})})
+    .then(function(r){return r.json().then(function(d){return {ok:r.ok, d:d}})})
+    .then(function(res){
+      if (!res.ok || !res.d.alarm_at) { window.alert(res.d.error || "Couldn’t update the alarm."); return; }
+      saved.alarm_at = res.d.alarm_at; saved.reason = res.d.reason; saved.reminders = res.d.reminders || [];
+      localStorage.setItem(KEY, JSON.stringify(saved));
+      showParked(saved);
+    }).catch(function(){window.alert("Couldn’t update the alarm.")});
+}
+function loadHelp(){
+  var box = document.getElementById("helplinks");
+  if (!box) return;
+  fetch("/help").then(function(r){return r.json()}).then(function(d){
+    box.innerHTML = (d.links || []).map(function(l){return '<a class="btn alt" href="'+esc(l.url)+'">'+esc(l.name)+'</a>'}).join("");
+  }).catch(function(){});
+}
+function showPermits(){
+  var list = savedPermits();
+  var h = '<section class="box"><h2>My permit districts</h2><p>Preferential parking that matches a district you save is not applied to you. Type the district from your permit, such as PPD 118.</p>';
+  h += '<ul class="spots">'+list.map(function(n){return '<li>'+esc(n)+'</li>'}).join("")+'</ul>';
+  h += '<label for="permitadd">District</label><input id="permitadd" type="text" placeholder="PPD 118">';
+  h += '<button id="permitsave" type="button">Save district</button></section>';
+  out.innerHTML = h;
+  document.getElementById("permitsave").addEventListener("click", function(){
+    savePermitName(document.getElementById("permitadd").value); showPermits();
+  });
+}
+function showHolidays(){
+  say("Loading the city holiday calendar…");
+  var year = new Date().getFullYear();
+  fetch("/holidays?year="+year).then(function(r){return r.json()}).then(function(d){
+    var h = '<section class="box"><h2>LADOT holidays '+esc(d.year)+'</h2><p>Meters, time limits, and timed no-parking are off on meter holidays. Street sweeping is also off those days, plus Cesar Chavez Day and the day after Thanksgiving. Red curbs stay red.</p><ul class="spots">';
+    (d.holidays || []).forEach(function(item){
+      h += '<li><b>'+esc(item.date)+'</b> '+esc(item.name)+' · '+(item.meters_off ? "meters off" : "sweeping only")+'</li>';
+    });
+    h += '</ul></section>';
+    out.innerHTML = h;
+  }).catch(function(){say("Couldn’t load holidays.")});
+}
+function showTicketHelp(){
+  say("Loading official links…");
+  fetch("/help").then(function(r){return r.json()}).then(function(d){
+    var h = '<section class="box"><h2>Ticket or tow</h2><p>These are LADOT’s pages. A parked session can also export the sign photo names, times, location, and rules the app showed.</p>';
+    (d.links || []).forEach(function(l){h += '<a class="btn" href="'+esc(l.url)+'">'+esc(l.name)+'</a>'});
+    h += '</section>';
+    out.innerHTML = h;
+  }).catch(function(){say("Couldn’t load the links.")});
+}
+document.getElementById("autosetup").addEventListener("click", showAutoSetup);
+document.getElementById("permits").addEventListener("click", showPermits);
+document.getElementById("holidays").addEventListener("click", showHolidays);
+document.getElementById("tickethelp").addEventListener("click", showTicketHelp);
+ensureToken().catch(function(){});
+document.getElementById("alertsettings").addEventListener("click", showAlertSettings);
+if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", function(e){
+  if (!e.data || e.data.type !== "alarm") return;
+  beep(e.data.level === "final");
+});
+restore();
+maybeAutopark();
 </script>
 </body>
 </html>

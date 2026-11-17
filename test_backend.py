@@ -1,12 +1,19 @@
 """Offline test: builds a tiny database by hand and checks the answers."""
-import json, sqlite3, os
+import base64, json, sqlite3, os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import ingest
 ingest.DB = "test.db"
 import server
 server.DB = "test.db"
-from rules import Rule, move_by
+from rules import (Rule, move_by, answer, windows, apply_sign, rules_from_sign, holiday_name,
+                   sweeping_holiday_name, parse_days)
+import alarms
+import citylinks
+import signparse
+import signread
+import vapid_keys
+from datetime import date
 
 tz = ZoneInfo("America/Los_Angeles")
 def at(s): return datetime.fromisoformat(s).replace(tzinfo=tz)
@@ -39,5 +46,434 @@ mr = ingest.meter_rules({"timelimit": "2HR"})[0]
 assert mr["hours_known"] is False and mr["confidence"] == "low"
 res = move_by([Rule(**mr)], at("2026-10-23T14:00"))
 assert res["hours_known"] is False and "Check the sign" in res["headline"] and res["move_by"].startswith("2026-10-23T16:00"), res
+body = server.assemble(34.1016, -118.3387, at("2026-10-23T14:00"))
+assert body["can_park"] is True and body["answer_word"] == "Yes", body
+assert body["move_by"].startswith("2026-10-23T16:00") and body["facts"]["time_limit"] == "2 hours"
+assert body["timeline"][0]["date"] == "2026-10-23"
+assert any(s["status"] == "limit" for s in body["timeline"][0]["segments"])
+assert {g["id"] for g in body["gaps"]} >= {"sweep", "tow", "curb"}
+assert "meter" not in {g["id"] for g in body["gaps"]}
 os.remove("test.db")
+
+# Overlap: tow-away beats a meter, and the earlier deadline wins.
+tow = [Rule("limit", list(range(7)), 8*60, 18*60, "2-hour meter", 120, topic="meter"),
+       Rule("no", list(range(5)), 8*60, 10*60, "Rush-hour tow-away", topic="tow")]
+assert move_by(tow, at("2026-10-23T09:00"))["status"] == "no"
+assert answer(tow, at("2026-10-23T10:30"))["move_by"].startswith("2026-10-23T12:30")
+assert move_by(tow, at("2026-10-23T07:00"))["move_by"].startswith("2026-10-23T08:00")
+
+# Overnight rule crosses midnight. Monday 2026-10-19.
+night = [Rule("no", [0], 22*60, 6*60, "Overnight tow-away", topic="tow")]
+assert move_by(night, at("2026-10-19T21:00"))["move_by"].startswith("2026-10-19T22:00")
+assert move_by(night, at("2026-10-19T23:00"))["status"] == "no"
+late = answer(night, at("2026-10-20T01:00"))
+assert late["status"] == "no" and late["until"].startswith("2026-10-20T06:00"), late
+assert answer(night, at("2026-10-20T06:00"))["status"] != "no"
+mon = windows(night, at("2026-10-19T12:00"), 2)
+assert any(s["status"] == "no" and s["start_min"] == 22*60 for s in mon[0]["segments"])
+assert any(s["status"] == "no" and s["start_min"] == 0 and s["end_min"] == 6*60 for s in mon[1]["segments"])
+
+# Sweeping is only on its weekday, and the timeline is three blocks that day.
+sweep = [Rule("no", [2], 600, 720, "Street sweeping", topic="sweep")]
+tl = windows(sweep, at("2026-10-20T08:00"), 4)  # Tue, Wed, Thu, Fri
+assert tl[0]["weekday"] == "Tuesday" and all(s["status"] != "no" for s in tl[0]["segments"])
+assert tl[1]["weekday"] == "Wednesday"
+assert [(s["start_min"], s["end_min"], s["status"]) for s in tl[1]["segments"]] == [(0, 600, "ok"), (600, 720, "no"), (720, 1440, "ok")]
+
+# Holidays. July 4 2026 is a Saturday, observed Friday July 3 as well.
+assert holiday_name(date(2026, 1, 19)) == "Martin Luther King Jr. Day"
+assert holiday_name(date(2026, 2, 16)) == "Presidents Day"
+assert holiday_name(date(2026, 5, 25)) == "Memorial Day"
+assert holiday_name(date(2026, 9, 7)) == "Labor Day"
+assert holiday_name(date(2026, 10, 12)) == "Columbus Day"
+assert holiday_name(date(2026, 11, 26)) == "Thanksgiving Day"
+assert holiday_name(date(2026, 11, 11)) == "Veterans Day"
+assert holiday_name(date(2026, 7, 4)) == "Independence Day"
+assert holiday_name(date(2026, 7, 3)) == "Independence Day (observed)"
+assert holiday_name(date(2026, 7, 2)) is None
+assert holiday_name(date(2021, 7, 4)) == "Independence Day"
+assert holiday_name(date(2021, 7, 5)) == "Independence Day (observed)"
+assert holiday_name(date(2027, 12, 31)) == "New Year's Day (observed)"
+assert sweeping_holiday_name(date(2026, 3, 31)) == "Cesar Chavez Day"
+assert sweeping_holiday_name(date(2026, 11, 27)) == "Day after Thanksgiving"
+assert holiday_name(date(2026, 3, 31)) is None
+
+meter_h = Rule("limit", list(range(7)), 8*60, 18*60, "2-hour meter", 120, skip_holidays=True, hours_known=True, topic="meter")
+sweep_h = Rule("no", [2], 600, 720, "Street sweeping", skip_holidays=True, also_sweep_holidays=True, topic="sweep")
+vet = answer([meter_h, sweep_h], at("2026-11-11T10:30"))
+assert vet["status"] != "no" and vet["holiday"] == "Veterans Day", vet
+assert vet["move_by"].startswith("2026-11-18T10:00"), vet
+mid = next(s for s in windows([meter_h, sweep_h], at("2026-11-11T10:30"), 1)[0]["segments"] if s["start_min"] <= 630 < s["end_min"])
+assert mid["status"] == "ok" and "Not enforced" in mid["label"]
+july3 = answer([meter_h], at("2026-07-03T10:00"))
+assert july3["can_park"] is True and july3["move_by"] is None and "Independence" in july3["holiday"]
+assert answer([meter_h], at("2026-07-02T10:00"))["move_by"].startswith("2026-07-02T12:00")
+red = Rule("no", list(range(7)), 0, 1440, "Red curb", topic="curb")
+assert answer([red], at("2026-07-04T15:00"))["status"] == "no"
+cesar_meter = Rule("limit", list(range(7)), 8*60, 18*60, "2-hour meter", 120, skip_holidays=True, hours_known=True, topic="meter")
+cesar_sweep = Rule("no", [1], 8*60, 10*60, "Street sweeping", skip_holidays=True, also_sweep_holidays=True, topic="sweep")
+cesar = answer([cesar_meter, cesar_sweep], at("2026-03-31T09:00"))
+assert cesar["status"] == "limit" and cesar["move_by"].startswith("2026-03-31T11:00"), cesar
+assert "Cesar Chavez" in cesar["holiday_note"]
+friday_after = answer([
+    Rule("limit", list(range(7)), 8*60, 18*60, "2-hour meter", 120, skip_holidays=True, hours_known=True, topic="meter"),
+    Rule("no", [4], 8*60, 12*60, "Street sweeping", skip_holidays=True, also_sweep_holidays=True, topic="sweep"),
+], at("2026-11-27T10:00"))
+assert friday_after["status"] == "limit" and friday_after["move_by"].startswith("2026-11-27T12:00"), friday_after
+assert "Thanksgiving" in friday_after["holiday_note"]
+
+assert parse_days("Th,F") == [3, 4] and parse_days("Tu") == [1] and parse_days("W") == [2]
+assert parse_days("M") == [0] and parse_days("weekdays") == [0, 1, 2, 3, 4] and parse_days("Sunset") == []
+rules_s, warn = server.sweep_from_props({"Day": "Th,F", "Boundaries": "Sherman Way"})
+assert rules_s == [] and "Thursday" in warn and "Friday" in warn
+rules_s, warn = server.sweep_from_props({"posted_times": [{"days": [2, 3], "start": 600, "end": 720}]})
+assert rules_s[0].days == [2, 3] and rules_s[0].start == 600 and rules_s[0].also_sweep_holidays
+rules_s, warn = server.sweep_from_props({"notes": "Wednesday 10:00 am - 12:00 pm"})
+assert rules_s[0].days == [2] and rules_s[0].start == 600 and rules_s[0].end == 720
+
+base, day = ingest.split_route("10P136 Th")
+assert (base, day) == ("10P136", 3)
+assert ingest.split_route("10P136 W")[1] == 2
+assert ingest.split_route("EV231-9")[1] is None
+posted = ingest.index_posted([
+    {"route_no": "10P136 Th", "time_start": "8:00 AM", "time_end": "10:00 AM"},
+    {"route_no": "10P136 W", "time_start": "8:00 AM", "time_end": "10:00 AM"},
+])
+assert posted["10P136"] == [{"days": [2, 3], "start": 480, "end": 600}]
+priced = ingest.meter_rules({"timelimit": "2HR", "raterange": "$1.50", "ratetype": "FLAT"})[0]
+assert priced["rate"] == "$1.50" and priced["rate_type"] == "FLAT" and priced["skip_holidays"] is True
+tod = answer([Rule(**ingest.meter_rules({"timelimit": "2HR", "raterange": "$1.00 - $2.00", "ratetype": "TOD"})[0])], at("2026-10-23T14:00"))
+assert tod["facts"]["meter"] == "Yes — $1.00 - $2.00 (changes by time of day)", tod["facts"]
+
+sign = {"time_limit_min": 60, "limit_start": 480, "limit_end": 20*60, "limit_days": [0, 1, 2, 3, 4], "rate": "$1.50",
+        "sweeping": [{"days": [2], "start": 600, "end": 720}],
+        "tow": [{"days": [0, 1, 2, 3, 4], "start": 7*60, "end": 9*60}]}
+signed = rules_from_sign(sign)
+assert answer(signed, at("2026-10-21T10:30"))["status"] == "no"
+assert answer(signed, at("2026-10-21T12:00"))["move_by"].startswith("2026-10-21T13:00")
+enforced = rules_from_sign({"time_limit_min": 60, "limit_start": 480, "limit_end": 20*60,
+                            "limit_days": [0, 1, 2, 3, 4], "holidays_enforced": True})
+assert answer(enforced, at("2026-11-11T10:00"))["status"] == "limit"
+city = [Rule("limit", list(range(7)), 0, 1440, "4-hour limit", 240, topic="meter", hours_known=False)]
+assert apply_sign(city, {"time_limit_min": 30, "limit_start": 480, "limit_end": 1080})[0].limit_min == 30
+assert apply_sign(city, {"time_limit_min": 0}) == []
+
+alarms.SESSION_DB = "test-sessions.db"
+for name in ("test-sessions.db", "test-sessions.db-wal", "test-sessions.db-shm"):
+    if os.path.exists(name): os.remove(name)
+assert [t["minutes_before"] for t in alarms.reminder_times(at("2026-10-23T14:10"), at("2026-10-23T14:00"))] == [5, 0]
+assert [t["minutes_before"] for t in alarms.reminder_times(at("2026-10-23T14:03"), at("2026-10-23T14:00"))] == [0]
+sid = alarms.upsert_sub({"endpoint": "https://push.example/abc", "keys": {"p256dh": "k", "auth": "a"}})
+saved = alarms.save_park(34.1, -118.3, "HOLLYWOOD BLVD", at("2026-10-23T14:30"), "2-hour meter ends", "move", sid, at("2026-10-23T14:00"))
+assert [r["minutes_before"] for r in saved["reminders"]] == [15, 5, 0]
+ics = alarms.build_ics(saved["id"], at("2026-10-23T14:30"), "Move your car", "2-hour meter ends")
+assert "TRIGGER:-PT15M" in ics and "TRIGGER:-PT5M" in ics and "TRIGGER:PT0S" in ics
+sent = []
+def fake(sub, payload):
+    sent.append(payload["title"])
+    return True
+assert alarms.send_due(at("2026-10-23T14:15:05"), fake) == 1
+assert alarms.send_due(at("2026-10-23T14:25:00"), fake) == 1
+assert alarms.send_due(at("2026-10-23T14:30:00"), fake) == 1
+assert sent == ["Move your car in 15 minutes", "Move your car in 5 minutes", "Move your car now"]
+try:
+    alarms.upsert_sub({})
+    raise SystemExit("bad subscription was accepted")
+except ValueError:
+    pass
+keys = vapid_keys.new_key_material()
+assert len(keys["public_raw"]) == 65 and keys["private_pem"].startswith("-----BEGIN PRIVATE KEY-----")
+
+# Auto-park: a Shortcut posts lat/lng with a per-phone token. No token is committed.
+if os.path.exists("test.db"): os.remove("test.db")
+db = sqlite3.connect("test.db")
+db.executescript("""CREATE TABLE meters(id,lat,lng,address,rules);
+ CREATE TABLE sweep(id,props,geom,minlat,maxlat,minlng,maxlng);
+ CREATE TABLE ppd(props,geom,minlat,maxlat,minlng,maxlng);""")
+db.execute("INSERT INTO meters VALUES('1',34.1016,-118.3387,'HOLLYWOOD BLVD',?)", (json.dumps([{
+    "kind": "limit", "days": list(range(7)), "start": 480, "end": 1080, "label": "2-hour meter",
+    "limit_min": 120, "source": "t", "confidence": "high", "hours_known": True, "topic": "meter"}]),))
+db.execute("INSERT INTO meters VALUES('2',34.2,-118.2,'RED CURB',?)", (json.dumps([{
+    "kind": "no", "days": list(range(7)), "start": 0, "end": 1440, "label": "Red curb", "topic": "curb"}]),))
+db.commit()
+server.DB = "test.db"
+fresh = alarms.ensure_device()
+assert alarms.valid_token(fresh) and alarms.ensure_device(fresh) == fresh
+adopted = "a" * 40
+assert alarms.ensure_device(adopted) == adopted
+assert alarms.ensure_device("too-short") != "too-short"
+code, payload = server.api_autopark({"lat": 34.1, "lng": -118.3}, "", at("2026-10-23T14:00"))
+assert code == 401, payload
+code, payload = server.api_autopark({"token": "b" * 40, "lat": 34.1, "lng": -118.3}, "", at("2026-10-23T14:00"))
+assert code == 401
+code, payload = server.api_autopark({"token": fresh}, "", at("2026-10-23T14:00"))
+assert code == 400 and "lat" in payload["error"]
+pushes = []
+def grab(sub, payload):
+    pushes.append(payload)
+    return True
+code, payload = server.api_autopark(
+    {"token": fresh, "lat": 34.1016, "lng": -118.3387}, "", at("2026-10-23T14:00"), grab)
+assert code == 200, payload
+assert payload["message"] == "Parked at HOLLYWOOD BLVD, move by Fri 4:00 PM", payload
+assert payload["alarm_at"].startswith("2026-10-23T16:00")
+assert [r["minutes_before"] for r in payload["reminders"]] == [15, 5, 0]
+assert pushes == []
+linked = alarms.ensure_device(sub={"endpoint": "https://push.example/auto", "keys": {"p256dh": "k", "auth": "a"}})
+code, payload = server.api_autopark(
+    {"lat": 34.1016, "lng": -118.3387}, "Bearer " + linked, at("2026-10-23T14:00"), grab)
+assert code == 200 and pushes[-1]["title"] == "Parked", pushes
+assert pushes[-1]["body"] == "Parked at HOLLYWOOD BLVD, move by Fri 4:00 PM"
+again = len(pushes)
+# Bluetooth disconnect, then CarPlay a minute later with a drifted GPS fix.
+code, second = server.api_autopark(
+    {"token": linked, "lat": 34.1035, "lng": -118.3387}, "", at("2026-10-23T14:01"), grab)
+assert code == 200 and second["duplicate"] is True and second["id"] == payload["id"], second
+assert len(pushes) == again
+def counts(sql, args):
+    conn = sqlite3.connect(alarms.SESSION_DB)
+    try:
+        return conn.execute(sql, args).fetchone()[0]
+    finally:
+        conn.close()
+assert counts("SELECT COUNT(*) FROM parks WHERE device_token=? AND cancelled=0", (linked,)) == 1
+assert counts("SELECT COUNT(*) FROM reminders WHERE park_id=?", (payload["id"],)) == 3
+# After the window, a new departure gets its own session and its own three reminders.
+code, later = server.api_autopark(
+    {"token": linked, "lat": 34.1016, "lng": -118.3387}, "", at("2026-10-23T14:04"), grab)
+assert code == 200 and later["duplicate"] is False and later["id"] != payload["id"], later
+assert counts("SELECT COUNT(*) FROM reminders WHERE park_id=?", (later["id"],)) == 3
+assert counts("SELECT COUNT(*) FROM reminders WHERE park_id=?", (payload["id"],)) == 3
+red_token = alarms.ensure_device()
+code, red = server.api_autopark(
+    {"token": red_token, "lat": 34.2, "lng": -118.2}, "", at("2026-10-23T14:00"), grab)
+assert code == 200 and red["message"] == "Parked at RED CURB, move now", red
+empty_token = alarms.ensure_device()
+code, nowhere = server.api_autopark(
+    {"token": empty_token, "lat": 0, "lng": 0}, "", at("2026-10-23T14:00"), grab)
+assert code == 200 and "No move-by time" in nowhere["message"]
+# Escalating alerts: leads, night-before and morning for sweeping/tow, repeats, snooze, cancel.
+sweep_deadline = at("2026-10-21T08:00")  # Wednesday 8 AM
+planned = alarms.plan_alerts(sweep_deadline, at("2026-10-20T15:00"), "Street sweeping starts")
+kinds = [a["kind"] for a in planned]
+assert kinds == ["night", "morning", "15", "5", "now"], kinds
+assert next(a["at"] for a in planned if a["kind"] == "night") == at("2026-10-20T20:00")
+assert next(a["at"] for a in planned if a["kind"] == "morning") == at("2026-10-21T07:00")
+afternoon = alarms.plan_alerts(at("2026-10-21T14:00"), at("2026-10-20T12:00"), "Tow-away / no stopping starts")
+assert "night" in [a["kind"] for a in afternoon] and "morning" not in [a["kind"] for a in afternoon]
+late = alarms.plan_alerts(sweep_deadline, at("2026-10-20T21:00"), "Street sweeping starts")
+assert "night" not in [a["kind"] for a in late] and "morning" in [a["kind"] for a in late]
+early = alarms.plan_alerts(at("2026-10-21T06:30"), at("2026-10-20T18:00"), "Rush-hour tow-away starts")
+assert next(a["at"] for a in early if a["kind"] == "morning") == at("2026-10-21T05:30")
+custom = alarms.plan_alerts(at("2026-10-23T16:00"), at("2026-10-23T14:00"), "2-hour meter ends", {"lead_minutes": [30, 10]})
+assert [a["minutes_before"] for a in custom if a["minutes_before"] is not None] == [30, 10, 0]
+meter_only = alarms.plan_alerts(at("2026-10-23T16:00"), at("2026-10-23T14:00"), "2-hour meter ends")
+assert [a["kind"] for a in meter_only] == ["15", "5", "now"]
+final = alarms.alert_content("now", "HOLLYWOOD BLVD", "Street sweeping starts", "abc")
+assert final["title"] == "Move your car now" and final["requireInteraction"] is True and final["urgent"] is True and final["level"] == "final"
+lead = alarms.alert_content("15", "HOLLYWOOD BLVD", "2-hour meter ends", "abc")
+assert lead["title"] == "Move your car in 15 minutes" and lead["urgent"] is False
+repeat = alarms.alert_content("repeat", "HOLLYWOOD BLVD", "Street sweeping starts", "abc")
+assert repeat["title"] == "Still there — move the car" and repeat["requireInteraction"] is True
+assert alarms.next_repeat(at("2026-10-23T16:00"), at("2026-10-23T16:00")) == at("2026-10-23T16:03")
+assert alarms.next_repeat(at("2026-10-23T16:00"), at("2026-10-23T16:16")) is None
+alarms.SESSION_DB = "test-alerts.db"
+sid = alarms.upsert_sub({"endpoint": "https://push.example/nag", "keys": {"p256dh": "k", "auth": "a"}})
+nag_park = alarms.save_park(34.1, -118.3, "HOLLYWOOD BLVD", at("2026-10-23T16:00"), "Street sweeping starts", "move", sid, at("2026-10-23T15:56"))
+assert "night" not in [r["kind"] for r in nag_park["reminders"]]  # same afternoon
+nag_msgs = []
+def grab_nag(sub, payload):
+    nag_msgs.append(payload)
+    return True
+assert alarms.send_due(at("2026-10-23T16:00:01"), grab_nag) == 1
+assert nag_msgs[-1]["urgent"] is True and nag_msgs[-1]["requireInteraction"] is True
+conn = sqlite3.connect(alarms.SESSION_DB)
+queued = conn.execute("SELECT fire_at, kind FROM reminders WHERE park_id=? AND sent=0", (nag_park["id"],)).fetchall()
+conn.close()
+assert len(queued) == 1 and queued[0][1] == "repeat" and queued[0][0].startswith("2026-10-23T16:03"), queued
+snoozed = alarms.snooze_park(nag_park["id"], at("2026-10-23T16:01"))
+assert snoozed["snooze_until"].startswith("2026-10-23T16:11")
+conn = sqlite3.connect(alarms.SESSION_DB)
+left = conn.execute("SELECT fire_at FROM reminders WHERE park_id=? AND sent=0 AND kind='repeat'", (nag_park["id"],)).fetchall()
+conn.close()
+assert [row[0] for row in left] == [snoozed["snooze_until"]]
+assert alarms.cancel_park(nag_park["id"]) is True
+conn = sqlite3.connect(alarms.SESSION_DB)
+assert conn.execute("SELECT COUNT(*) FROM reminders WHERE park_id=? AND sent=0", (nag_park["id"],)).fetchone()[0] == 0
+conn.close()
+assert alarms.send_due(at("2026-10-23T16:11"), grab_nag) == 0
+
+# Sign text -> rules. Photos are not required; the vision API only supplies this text.
+sweep = signparse.parse_sign_text("NO PARKING\nSTREET SWEEPING\nTUESDAY\n8AM - 10AM\n←")
+assert sweep["summary"] == [
+    "Street sweeping 8:00 AM–10:00 AM, Tuesday.",
+    "Arrow points left. The rule applies that direction from the sign."]
+assert sweep["sweeping"] == [{"days": [1], "start": 480, "end": 600}] and sweep["arrows"] == "left"
+limit = signparse.parse_sign_text("2 HOUR PARKING\n8AM TO 6PM\nMONDAY - SATURDAY")
+assert limit["time_limit_min"] == 120 and limit["limit_days"] == list(range(6))
+assert limit["limit_start"] == 480 and limit["limit_end"] == 1080
+assert limit["summary"] == ["2-hour parking, 8:00 AM–6:00 PM, Monday–Saturday."]
+tow = signparse.parse_sign_text("TOW-AWAY\nNO STOPPING\n7AM - 9AM\n4PM - 7PM\nMONDAY THRU FRIDAY")
+assert tow["tow"] == [{"days": list(range(5)), "start": 420, "end": 540},
+                      {"days": list(range(5)), "start": 960, "end": 1140}]
+assert "7:00 AM–9:00 AM and 4:00 PM–7:00 PM, Monday–Friday" in tow["summary"][0]
+assert signparse.parse_sign_text("NO PARKING ANY TIME")["summary"] == ["No parking at any time."]
+permit = signparse.parse_sign_text("PERMIT PARKING ONLY\n6PM - 8AM\nDAILY")
+assert permit["permit"] == [{"days": list(range(7)), "start": 1080, "end": 480}]
+meter = signparse.parse_sign_text("PAY AT METER\n$1.50 PER HOUR\n2 HOUR LIMIT\n8AM - 8PM\nMON - SAT")
+assert meter["summary"] == ["2-hour meter, 8:00 AM–8:00 PM, Monday–Saturday, $1.50 per hour."]
+one = signparse.parse_sign_text("1 HOUR PARKING\n8AM-6PM\nEXCEPT SUNDAY\nHOLIDAYS ENFORCED\n→")
+assert one["time_limit_min"] == 60 and one["limit_days"] == list(range(6)) and one["holidays_enforced"] is True
+assert one["arrows"] == "right" and any("Holidays are enforced." == line for line in one["summary"])
+stacked = signparse.parse_sign_text(
+    "NO PARKING\nSTREET SWEEPING\nWEDNESDAY\n8AM TO 10AM\n\n2 HOUR PARKING\n8AM TO 6PM\nMON - SAT")
+assert stacked["sweeping"][0]["days"] == [2] and stacked["time_limit_min"] == 120
+both = signparse.parse_sign_text("2 HOUR PARKING\n8AM - 6PM\n← →")
+assert both["arrows"] == "both"
+city = [Rule("limit", list(range(7)), 0, 1440, "2-hour limit", 120, topic="meter", hours_known=False)]
+msgs = signparse.sign_conflicts(city, one)
+assert msgs and "disagree" in msgs[0] and "Using the sign" in msgs[0] and "1-hour" in msgs[0]
+same = signparse.parse_sign_text("2 HOUR PARKING\n8AM TO 6PM\nMONDAY - SATURDAY")
+agree_city = [Rule("limit", list(range(6)), 480, 1080, "2-hour limit", 120, topic="meter", hours_known=True)]
+assert signparse.sign_conflicts(agree_city, same) == []
+merged = apply_sign(city, one)
+assert len(merged) == 1 and merged[0].limit_min == 60 and merged[0].source == "Sign you entered"
+os.environ.pop("SIGN_VISION_API_KEY", None)
+assert signread.configured() is False
+try:
+    signread.decode_images([])
+    raise SystemExit("empty photos were accepted")
+except ValueError:
+    pass
+tiny = base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
+saved_scan = signread.read_sign(signread.decode_images(["data:image/png;base64," + tiny]), [])
+assert saved_scan["available"] is False and saved_scan["scan_id"] and "Type what the sign says" in saved_scan["message"]
+assert signread.attach_scan(saved_scan["scan_id"], "park123") == 1
+# Holiday calendar, saved permits, paid-until, nearby legal spots, crowd reports.
+from rules import holiday_calendar, permit_covers
+cal = {h["date"]: h for h in holiday_calendar(2026)}
+assert cal["2026-01-01"]["meters_off"] and cal["2026-01-01"]["sweeping_off"]
+assert cal["2026-07-03"]["meters_off"] and cal["2026-07-04"]["meters_off"]
+assert cal["2026-03-31"]["sweeping_off"] and cal["2026-03-31"]["meters_off"] is False
+assert cal["2026-11-26"]["meters_off"] and cal["2026-11-27"]["sweeping_off"] and cal["2026-11-27"]["meters_off"] is False
+assert permit_covers("Preferential Parking District PPD 118", ["118"])
+assert permit_covers("PPD 119", ["118"]) is False
+assert citylinks.text_pay_url("17-126") == "sms:77447&body=17126"
+assert citylinks.text_pay_url("") is None
+assert any("pay-a-citation" in item["url"] for item in citylinks.help_links())
+assert any("booted-towed" in item["url"] for item in citylinks.help_links())
+
+near = sqlite3.connect("nearby.db")
+near.execute("CREATE TABLE meters(id,lat,lng,address,rules)")
+near.execute("INSERT INTO meters VALUES('here',34.10,-118.30,'HERE ST',?)",
+             (json.dumps([{"kind":"no","days":list(range(7)),"start":0,"end":1440,"label":"Red curb","source":"t"}]),))
+near.execute("INSERT INTO meters VALUES('there',34.1002,-118.30,'THERE ST',?)",
+             (json.dumps([{"kind":"limit","days":list(range(7)),"start":480,"end":1080,"label":"2-hour meter","limit_min":120,"source":"t","hours_known":True}]),))
+near.commit()
+near.close()
+server.DB = "nearby.db"
+spots = server.legal_nearby(34.10, -118.30, at("2026-10-23T10:00"))
+assert len(spots) == 1 and spots[0]["address"] == "THERE ST" and spots[0]["stay_minutes"] == 120, spots
+
+alarms.SESSION_DB = "test-reports.db"
+if os.path.exists("test-reports.db"): os.remove("test-reports.db")
+token = alarms.ensure_device()
+rep = alarms.create_report(token, 34.10, -118.30, "temp_no_parking", "Film crew", at("2026-10-23T10:00"))
+blocked = server.assemble(34.10, -118.30, at("2026-10-23T10:30"))
+assert blocked["status"] == "no" and blocked["can_park"] is False and "Temporary no-parking" in blocked["reason"]
+again = alarms.confirm_report(token, rep["id"], at("2026-10-23T10:31"))
+assert again["already"] is True and again["confirms"] == 1
+other = alarms.ensure_device()
+confirmed = alarms.confirm_report(other, rep["id"], at("2026-10-23T10:32"))
+assert confirmed["confirms"] == 2 and confirmed["already"] is False
+for n in range(4):
+    alarms.create_report(token, 34.11, -118.31, "broken_meter", str(n), at("2026-10-23T10:40"))
+try:
+    alarms.create_report(token, 34.11, -118.31, "enforcement", "sixth", at("2026-10-23T10:50"))
+    raise SystemExit("abuse limit did not fire")
+except ValueError:
+    pass
+spots = server.legal_nearby(34.10, -118.30, at("2026-10-23T10:30"))
+assert spots == []
+
+paid_park = alarms.save_park(34.1, -118.3, "THERE ST", at("2026-10-23T12:00"), "2-hour meter", "Move by noon",
+                             None, at("2026-10-23T10:00"), token)
+moved = alarms.reschedule_paid(paid_park["id"], at("2026-10-23T14:00"), at("2026-10-23T10:05"))
+assert moved["ok"] and moved["alarm_at"].startswith("2026-10-23T14:00")
+assert [r["kind"] for r in moved["reminders"]] == ["15", "5", "now"]
+sweep_park = alarms.save_park(34.1, -118.3, "THERE ST", at("2026-10-23T12:00"), "Street sweeping", "Sweeping",
+                              None, at("2026-10-23T10:00"), token)
+kept = alarms.reschedule_paid(sweep_park["id"], at("2026-10-23T15:00"), at("2026-10-23T10:05"))
+assert kept["ok"] is False and kept["alarm_at"].startswith("2026-10-23T12:00")
+text = server.evidence_text(paid_park["id"])
+assert "THERE ST" in text and "Rules and warnings shown" in text
+
+# E 7th St & Gladys Ave. Census geocoder: 34.038684, -118.243886.
+# Posted sweeping areas that contain that point, and the nearest real meter (801 Agatha St, 186 m).
+assert parse_days("Monday to Friday") == [0, 1, 2, 3, 4]
+assert parse_days("Mon, Tue, Wed, Thu, & Fri") == [0, 1, 2, 3, 4]
+gladys_routes = [
+    {"Route": "DT 2", "Posted_Time": "1 am - 4 am", "Posted_Day": "Monday to Friday",
+     "Day_Short": "Mon, Tue, Wed, Thu, & Fri",
+     "Boundaries": "Central Ave to Figueroa St / 5th St to 9th St"},
+    {"Route": "Skid Row W", "Posted_Time": "1 am - 4 am", "Posted_Day": "Wednesday",
+     "Day_Short": "Wed", "Boundaries": "San Pedro St to Central Av / 3rd St to 7th St"},
+    {"Route": "Skid Row F", "Posted_Time": "1 am - 4 am", "Posted_Day": "Friday",
+     "Day_Short": "Fri", "Boundaries": "San Pedro St to Central Av / 3rd St to 7th St"},
+]
+dt2, dt2_warn = server.sweep_from_props(gladys_routes[0])
+assert dt2[0].days == [0, 1, 2, 3, 4] and dt2[0].start == 60 and dt2[0].end == 240 and "DT 2" in dt2[0].label
+assert "Central Ave" in dt2_warn and dt2[0].skip_holidays and dt2[0].also_sweep_holidays
+GLADYS = (34.038684, -118.243886)
+AGATHA = (34.03802, -118.245733)
+
+def _box(lat, lng, pad=0.0012):
+    ring = [[lng - pad, lat - pad], [lng + pad, lat - pad], [lng + pad, lat + pad],
+            [lng - pad, lat + pad], [lng - pad, lat - pad]]
+    return {"type": "Polygon", "coordinates": [ring]}
+
+gdb = sqlite3.connect("gladys.db")
+gdb.executescript("""CREATE TABLE meters(id,lat,lng,address,rules);
+  CREATE TABLE sweep(id,props,geom,minlat,maxlat,minlng,maxlng);
+  CREATE TABLE ppd(props,geom,minlat,maxlat,minlng,maxlng);""")
+agatha_rules = ingest.meter_rules({"timelimit": "2HR", "raterange": "$1.00 - $2.50", "ratetype": "TOD"})
+gdb.execute("INSERT INTO meters VALUES('ED832',?,?,?,?)",
+            (AGATHA[0], AGATHA[1], "801 AGATHA ST", json.dumps(agatha_rules)))
+geom = _box(*GLADYS)
+pts = geom["coordinates"][0]
+for i, props in enumerate(gladys_routes):
+    gdb.execute("INSERT INTO sweep VALUES(?,?,?,?,?,?,?)",
+                (i, json.dumps(props), json.dumps(geom),
+                 min(p[1] for p in pts), max(p[1] for p in pts),
+                 min(p[0] for p in pts), max(p[0] for p in pts)))
+gdb.commit()
+gdb.close()
+server.DB = "gladys.db"
+night = server.assemble(*GLADYS, at("2026-11-16T02:00"))  # Monday, sweeping in effect
+assert night["status"] == "no" and night["can_park"] is False and "DT 2" in night["reason"], night
+assert night["until"].startswith("2026-11-16T04:00")
+assert all(r["kind"] != "limit" for r in night["rules"])
+assert any("801 AGATHA ST" in w and "not applied" in w for w in night["warnings"])
+assert any("San Pedro" in w for w in night["warnings"]) and any("Figueroa" in w for w in night["warnings"])
+assert {g["id"] for g in night["gaps"]} >= {"meter", "tow", "curb"}
+assert "sweep" not in {g["id"] for g in night["gaps"]}
+day = server.assemble(*GLADYS, at("2026-11-16T10:00"))
+assert day["can_park"] is True and day["move_by"].startswith("2026-11-17T01:00"), day
+weekend = server.assemble(*GLADYS, at("2026-11-21T02:00"))  # Saturday, DT 2 is weekdays only
+assert weekend["can_park"] is True and weekend["move_by"].startswith("2026-11-23T01:00"), weekend
+veterans = server.assemble(*GLADYS, at("2026-11-11T02:00"))
+assert veterans["can_park"] is True and "Veterans Day" in (veterans.get("holiday_note") or "")
+assert veterans["move_by"].startswith("2026-11-12T01:00"), veterans
+meter_spot = server.assemble(*AGATHA, at("2026-10-23T14:00"))
+assert meter_spot["facts"]["time_limit"].startswith("2 hours") and meter_spot["meter"]["hours_known"] is False
+assert "$1.00 - $2.50" in meter_spot["facts"]["meter"] and "changes by time of day" in meter_spot["facts"]["meter"]
+assert "Check the sign" in meter_spot["headline"]
+
+import shutil
+shutil.rmtree(signread.PHOTO_DIR, ignore_errors=True)
+os.remove("test.db")
+for name in ("test-sessions.db", "test-sessions.db-wal", "test-sessions.db-shm",
+             "test-alerts.db", "test-alerts.db-wal", "test-alerts.db-shm",
+             "test-reports.db", "test-reports.db-wal", "test-reports.db-shm", "nearby.db", "gladys.db"):
+    if os.path.exists(name): os.remove(name)
 print("all tests passed")
