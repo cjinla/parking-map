@@ -270,15 +270,19 @@ def parked_message(place, when, now):
         return f"Parked at {place}, move now"
     return f"Parked at {place}, move by {clock_label(when)}"
 
+# CarPlay and Bluetooth often both disconnect. A couple of minutes covers both
+# arrivals, including a GPS reading that has drifted from the first one.
+AUTOPARK_DEDUPE = timedelta(minutes=3)
+
 def autopark(lat, lng, token, now, sender=None):
     """Save the spot from a Shortcut and send 'Parked at X, move by Y'."""
     device = alarms.get_device(token)
     if not device:
         raise PermissionError("unknown token")
     prev = alarms.latest_device_park(token)
-    if prev and prev.get("created") and prev.get("lat") is not None:
+    if prev and prev.get("created"):
         created = datetime.fromisoformat(prev["created"])
-        if now - created <= timedelta(minutes=3) and dist(lat, lng, prev["lat"], prev["lng"]) <= 80:
+        if abs(now - created) <= AUTOPARK_DEDUPE:
             when = datetime.fromisoformat(prev["move_by"]) if prev.get("move_by") else None
             return {"ok": True, "duplicate": True, "id": prev["id"], "alarm_at": prev.get("move_by"),
                     "address": prev.get("address"), "reason": prev.get("reason"), "headline": prev.get("headline"),

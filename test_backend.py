@@ -222,15 +222,32 @@ code, payload = server.api_autopark(
 assert code == 200 and pushes[-1]["title"] == "Parked", pushes
 assert pushes[-1]["body"] == "Parked at HOLLYWOOD BLVD, move by Fri 4:00 PM"
 again = len(pushes)
+# Bluetooth disconnect, then CarPlay a minute later with a drifted GPS fix.
 code, second = server.api_autopark(
-    {"token": linked, "lat": 34.10162, "lng": -118.3387}, "", at("2026-10-23T14:01"), grab)
-assert code == 200 and second["duplicate"] is True and second["id"] == payload["id"]
+    {"token": linked, "lat": 34.1035, "lng": -118.3387}, "", at("2026-10-23T14:01"), grab)
+assert code == 200 and second["duplicate"] is True and second["id"] == payload["id"], second
 assert len(pushes) == again
+def counts(sql, args):
+    conn = sqlite3.connect(alarms.SESSION_DB)
+    try:
+        return conn.execute(sql, args).fetchone()[0]
+    finally:
+        conn.close()
+assert counts("SELECT COUNT(*) FROM parks WHERE device_token=? AND cancelled=0", (linked,)) == 1
+assert counts("SELECT COUNT(*) FROM reminders WHERE park_id=?", (payload["id"],)) == 3
+# After the window, a new departure gets its own session and its own three reminders.
+code, later = server.api_autopark(
+    {"token": linked, "lat": 34.1016, "lng": -118.3387}, "", at("2026-10-23T14:04"), grab)
+assert code == 200 and later["duplicate"] is False and later["id"] != payload["id"], later
+assert counts("SELECT COUNT(*) FROM reminders WHERE park_id=?", (later["id"],)) == 3
+assert counts("SELECT COUNT(*) FROM reminders WHERE park_id=?", (payload["id"],)) == 3
+red_token = alarms.ensure_device()
 code, red = server.api_autopark(
-    {"token": fresh, "lat": 34.2, "lng": -118.2}, "", at("2026-10-23T14:00"), grab)
+    {"token": red_token, "lat": 34.2, "lng": -118.2}, "", at("2026-10-23T14:00"), grab)
 assert code == 200 and red["message"] == "Parked at RED CURB, move now", red
+empty_token = alarms.ensure_device()
 code, nowhere = server.api_autopark(
-    {"token": fresh, "lat": 0, "lng": 0}, "", at("2026-10-23T14:00"), grab)
+    {"token": empty_token, "lat": 0, "lng": 0}, "", at("2026-10-23T14:00"), grab)
 assert code == 200 and "No move-by time" in nowhere["message"]
 os.remove("test.db")
 for name in ("test-sessions.db", "test-sessions.db-wal", "test-sessions.db-shm"):

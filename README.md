@@ -30,20 +30,19 @@ To turn alerts on for a deploy, set the three environment variables below and re
 
 ## Auto-park when the car disconnects
 
-A web app cannot see Bluetooth or CarPlay. The timer starts from an iPhone Shortcut that runs when the car disconnects. The Shortcut reads Current Location and calls `POST /api/autopark`. The server saves the spot, schedules the 15-minute, 5-minute, and deadline alerts, and answers with a confirmation: `Parked at 5301 HOLLYWOOD BLVD, move by Mon 6:10 PM`. If this phone has allowed notifications, that same line is pushed immediately.
+A web app cannot see Bluetooth or CarPlay. Keith’s car uses Bluetooth and sometimes CarPlay, so both disconnects should start the timer. Build **one** shortcut named Park LA, then add **two** automations that run it: CarPlay disconnects, and the car’s Bluetooth device disconnects. Each one gets Current Location and calls `POST /api/autopark`. The server saves the spot, schedules the 15-minute, 5-minute, and deadline alerts, and answers with a confirmation: `Parked at 5301 HOLLYWOOD BLVD, move by Mon 6:10 PM`. If this phone has allowed notifications, that same line is pushed immediately.
+
+If both automations fire within 3 minutes, the second call keeps the first parking session and does not add another set of alarms, even when the two GPS readings disagree. A departure after that window gets its own timer.
 
 The token is created on the phone (Set up auto-park) and stored in `sessions.db` on the server. It is not in the source code. Treat it like a password for this phone. After a Render restart the phone can send the same token again and the server will remember it.
 
 Apple creates an iCloud Shortcut link only from the phone (Shortcuts → Share → Copy iCloud Link). These steps are the recipe.
 
 1. In the parking app, tap **Set up auto-park**. Leave that screen open. It shows the token and the address to call.
-2. Open the **Shortcuts** app.
-3. Tap the **Automation** tab at the bottom.
-4. Tap **+**, then **Create Personal Automation**.
-5. Tap **CarPlay**, then **Disconnects**. If you do not use CarPlay: tap **Bluetooth**, tap **Choose**, pick the car, and choose **Is Disconnected**.
-6. Turn off **Ask Before Running**. If the choice says **Run Immediately**, pick that, so the timer starts with the phone locked.
-7. Tap **Next**. Add **Get Current Location**.
-8. Add **Get Contents of URL**.
+2. Open the **Shortcuts** app. Tap the **Shortcuts** tab (the one that is not Automation).
+3. Tap **+**. Tap the name at the top and name it **Park LA**.
+4. Add **Get Current Location**.
+5. Add **Get Contents of URL**.
    - URL: paste the address from the app (`https://la-parking-yvn1.onrender.com/api/autopark` on the live site).
    - Method: **POST**.
    - Header: `Content-Type` = `application/json`.
@@ -51,16 +50,20 @@ Apple creates an iCloud Shortcut link only from the phone (Shortcuts → Share �
      - `token` (Text): paste the token from the app.
      - `lat` (Number): tap the value and choose **Latitude** from Get Current Location.
      - `lng` (Number): tap the value and choose **Longitude**.
-9. Add **Get Dictionary from Input** (Contents of URL).
-10. Add **Get Dictionary Value**. Key: `message`.
-11. Add **Show Notification**. Title: Parked. Body: the Dictionary Value.
-12. Tap **Done**.
+6. Add **Get Dictionary from Input** (Contents of URL).
+7. Add **Get Dictionary Value**. Key: `message`.
+8. Add **Show Notification**. Title: Parked. Body: the Dictionary Value. Tap **Done**.
+9. Tap the **Automation** tab, then **+**, then **Create Personal Automation**.
+10. Tap **CarPlay**, then **Disconnects**. Turn off **Ask Before Running**. If the choice says **Run Immediately**, pick that.
+11. Tap **Next**. Add **Run Shortcut** and choose **Park LA**. Tap **Done**.
+12. Tap **+** again, then **Create Personal Automation**. Tap **Bluetooth**, tap **Choose**, pick the car (the name that shows while the phone is in the car), and choose **Is Disconnected**.
+13. Turn off **Ask Before Running** when that switch is offered. Tap **Next**. Add **Run Shortcut** and choose **Park LA**. Tap **Done**.
 
-A token can also be sent as `Authorization: Bearer <token>` instead of the JSON field. A second call within three minutes at the same curb returns the same session, so a Shortcut that fires twice does not stack alarms.
+A token can also be sent as `Authorization: Bearer <token>` instead of the JSON field.
 
-Backup: the Shortcut can **Open URL** `https://la-parking-yvn1.onrender.com/autopark`. That page uses the token saved on this phone and the GPS. It needs the screen on. The POST works with the phone locked.
+Backup: the shortcut can **Open URL** `https://la-parking-yvn1.onrender.com/autopark`. That page uses the token saved on this phone and the GPS. It needs the screen on. The POST works with the phone locked.
 
-Apple sometimes still asks you to confirm a Bluetooth automation. CarPlay “Disconnects” is the trigger that can run with no tap. If Ask Before Running cannot be turned off, tap the Shortcuts banner once when you park and the timer starts.
+CarPlay “Disconnects” can run with the phone locked. Apple sometimes still asks you to confirm the Bluetooth automation. If Ask Before Running cannot be turned off, tap the Shortcuts banner once when you park and the timer starts. The other automation still covers that trip.
 
 The free Render service sleeps. The Shortcut wakes it. The first call after a long idle can take about a minute, and Shortcuts may report a timeout; run it once more.
 
