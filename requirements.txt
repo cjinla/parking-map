@@ -1,1 +1,2 @@
 tzdata
+pywebpush==2.5.0

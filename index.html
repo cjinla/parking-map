@@ -3,75 +3,456 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Park LA">
+<meta name="theme-color" content="#1d4f91">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <title>Can I park here? Los Angeles</title>
 <style>
-:root{--bg:#eef1f4;--card:#fff;--ink:#16202c;--mute:#5d6b7a;--line:#d5dce3;box-sizing:border-box;
-padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
-@media (prefers-color-scheme:dark){:root{--bg:#10161d;--card:#1a232d;--ink:#eef2f6;--mute:#9aa8b6;--line:#2c3945}}
+:root{
+  --bg:#e7eef5;--card:#fff;--ink:#142033;--mute:#5c6b7c;--line:#d5dee8;
+  --yes:#0c7a3e;--no:#b42318;--limit:#6b3a00;--permit:#1d4f91;--unknown:#3e4c59;
+  --pad:16px;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#0e141b;--card:#18222c;--ink:#f2f6fa;--mute:#a9b6c4;--line:#2c3b4a}
+}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.45 -apple-system,system-ui,Helvetica,Arial,sans-serif}
-main{max-width:480px;margin:0 auto;padding:16px}
-h1{font:800 28px/1.1 "Arial Narrow",Arial,sans-serif;margin:8px 0 14px}
-h2{font-size:17px;margin:22px 0 8px}
-button{width:100%;font:600 17px inherit;font-family:inherit;color:#fff;background:#1d4f91;border:0;border-radius:10px;padding:15px}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 17px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+main{max-width:32rem;margin:0 auto;padding:var(--pad) var(--pad) 32px}
+h1{font-size:2rem;line-height:1.05;margin:4px 0 6px;letter-spacing:-.03em}
+.eyebrow{margin:0;color:var(--mute);font-size:.85rem;font-weight:650;letter-spacing:.04em;text-transform:uppercase}
+[hidden]{display:none !important}
+button,a.btn{display:block;width:100%;font:700 1.05rem/1.2 inherit;text-align:center;text-decoration:none;
+  color:#fff;background:var(--permit);border:0;border-radius:14px;padding:16px 14px;min-height:52px}
 button:disabled{opacity:.6}
-button.alt{background:var(--card);color:var(--ink);border:1.5px solid var(--line);margin-top:10px}
-button:focus-visible{outline:3px solid #6fa8ff;outline-offset:2px}
+button.alt,a.alt{background:var(--card);color:var(--ink);border:1.5px solid var(--line);margin-top:10px}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #6fa8ff;outline-offset:2px}
+.hint{color:var(--mute);font-size:.9rem;margin:10px 0 0}
+details{margin-top:14px}
+summary{font-weight:650;cursor:pointer}
+label{display:block;margin:12px 0 4px;color:var(--mute);font-size:.9rem}
+input,select{width:100%;font:inherit;color:var(--ink);background:var(--card);border:1.5px solid var(--line);border-radius:10px;padding:12px}
+.row{display:flex;gap:8px}
+.row>*{flex:1}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chips label{margin:0;color:var(--ink);border:1.5px solid var(--line);background:var(--card);border-radius:999px;padding:8px 10px;font-size:.95rem}
+.chips input{width:auto;margin-right:4px}
 #out{margin-top:16px}
-.sign{border-radius:12px;padding:18px;color:#fff;background:var(--c)}
-.sign.ok{--c:#14803c}.sign.no{--c:#c4262e}.sign.limit{--c:#a35f00}.sign.permit{--c:#1d4f91}.sign.unknown{--c:#56626f}
-.sign b{display:block;font-size:24px;line-height:1.2}
+#out button,#out a.btn{margin-top:12px}
+.sign{border-radius:18px;padding:18px 16px;color:#fff;background:var(--c,#3e4c59)}
+.sign.ok{--c:var(--yes)}
+.sign.limit{--c:var(--limit)}
+.sign.no{--c:var(--no)}
+.sign.permit{--c:var(--permit)}
+.sign.unknown{--c:var(--unknown)}
+.sign .word{display:block;font-size:2.6rem;line-height:1;font-weight:800;letter-spacing:-.03em}
 .sign p{margin:8px 0 0}
-.box{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:8px}
-.warn{border-left:6px solid #a35f00}
-.rule span,.small{color:var(--mute);font-size:14px}
-.small{margin-top:18px}
+.facts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.facts div,.box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.facts span{display:block;color:var(--mute);font-size:.78rem;font-weight:650;text-transform:uppercase;letter-spacing:.03em}
+.facts b{display:block;margin-top:2px;font-size:1rem}
+.warn{border-left:6px solid var(--limit)}
+.day{margin-top:10px}
+.day h3{margin:0 0 6px;font-size:1rem}
+.bar{display:flex;height:14px;border-radius:999px;overflow:hidden;background:var(--line)}
+.bar i{display:block;height:100%}
+.bar i.ok{background:var(--yes)}.bar i.limit{background:#c47b12}.bar i.no{background:var(--no)}
+.bar i.permit{background:var(--permit)}.bar i.unknown{background:#8b98a6}
+.segs{list-style:none;padding:0;margin:8px 0 0}
+.segs li{display:flex;gap:8px;align-items:baseline;padding:4px 0;border-top:1px solid var(--line);font-size:.95rem}
+.tag{flex:0 0 auto;font-size:.72rem;font-weight:800;letter-spacing:.03em;text-transform:uppercase;color:#fff;border-radius:999px;padding:2px 6px}
+.tag.ok{background:var(--yes)}.tag.limit{background:#c47b12}.tag.no{background:var(--no)}
+.tag.permit{background:var(--permit)}.tag.unknown{background:#8b98a6}
+.count{font-size:3.2rem;font-weight:800;letter-spacing:-.04em;margin:4px 0;font-variant-numeric:tabular-nums}
+.alarm{position:sticky;bottom:0;margin-top:12px;background:var(--no);color:#fff;border-radius:14px;padding:14px}
+.alarm button{background:#fff;color:var(--no);margin-top:8px}
+.small{color:var(--mute);font-size:.85rem;margin-top:16px}
+.checkline{display:flex;gap:8px;align-items:center}
+.checkline input{width:auto}
 </style>
 </head>
 <body>
 <main>
+<p class="eyebrow">Los Angeles</p>
 <h1>Can I park here?</h1>
-<button id="go" type="button">Find my spot</button>
-<label for="addr" style="display:block;margin:16px 0 4px;color:var(--mute);font-size:14px">Or check an address</label>
-<input id="addr" type="text" placeholder="201 3rd St, Los Angeles" autocomplete="street-address" style="width:100%;font:inherit;color:var(--ink);background:var(--card);border:1.5px solid var(--line);border-radius:8px;padding:12px">
+<p class="hint">At the curb, check the spot. After you park, the app tells you when to move.</p>
+<button id="go" type="button">Check this spot</button>
+<details>
+<summary>Or type an address</summary>
+<label for="addr">Address in Los Angeles</label>
+<input id="addr" type="text" placeholder="201 3rd St, Los Angeles" autocomplete="street-address" enterkeyhint="search">
 <button id="addrgo" class="alt" type="button">Check address</button>
-<button id="again" class="alt" type="button" hidden>Check again</button>
+</details>
+<details>
+<summary>iPhone alarm setup</summary>
+<ol>
+<li>Open this page in <strong>Safari</strong> (not Chrome).</li>
+<li>Tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>.</li>
+<li>Open <strong>Park LA</strong> from your home screen.</li>
+<li>After you park, tap <strong>Add to Calendar</strong>. That alarm rings even if notifications are off.</li>
+<li>Tap <strong>Allow iPhone alerts</strong> and choose Allow. Needs iOS 16.4 or newer, and the home-screen app.</li>
+</ol>
+<p class="hint">The beep works only while this page is open and the screen is on. A locked iPhone needs the calendar alarm or a notification.</p>
+</details>
 <div id="out" aria-live="polite"></div>
 </main>
 <script>
-var go=document.getElementById("go"),again=document.getElementById("again"),out=document.getElementById("out");
-function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
-function say(t){out.innerHTML='<div class="box">'+esc(t)+'</div>'}
-function show(d){
- var cls={ok:"ok",limit:"limit",permit:"permit",no:"no"}[d.status]||"unknown";
- var h='<div class="sign '+cls+'"><b>'+esc(d.headline)+'</b>';
- if(d.searched)h+='<p>Searched near: '+esc(d.searched)+'</p>';
- if(d.address)h+='<p>Nearest meter: '+esc(d.address)+'</p>';
- h+='</div>';
- (d.warnings||[]).forEach(function(w){h+='<div class="box warn">'+esc(w)+'</div>'});
- if(d.confidence==="low")h+='<div class="box warn">Low confidence: the city data has a time limit but not when it is enforced.</div>';
- if(d.rules&&d.rules.length){h+='<h2>Rules found</h2>';d.rules.forEach(function(r){
-  h+='<div class="box rule"><strong>'+esc(r.label)+'</strong><br><span>'+esc(r.source)+'</span></div>'})}
- h+='<p class="small">'+esc(d.coverage||"")+' '+esc(d.disclaimer||"")+'</p>';
- out.innerHTML=h}
-function check(){
- go.disabled=true;again.hidden=true;say("Finding your location…");
- if(!navigator.geolocation){say("This browser can’t share your location.");go.disabled=false;return}
- navigator.geolocation.getCurrentPosition(function(p){
-  say("Checking the rules. The first check can take up to a minute while the server wakes up…");
-  fetch("/check?lat="+p.coords.latitude+"&lng="+p.coords.longitude)
-   .then(function(r){if(!r.ok)throw 0;return r.json()})
-   .then(function(d){show(d);go.disabled=false;go.textContent="Find my spot";again.hidden=false})
-   .catch(function(){say("Couldn’t reach the server. Try again in a moment.");go.disabled=false})
- },function(){say("Location is off or blocked. In Settings, allow location for Safari websites, then try again.");go.disabled=false},
- {enableHighAccuracy:true,timeout:15000})}
-function byAddress(){var a=document.getElementById("addr").value.trim();if(!a){say("Type an address first.");return}
- say("Checking the rules. The first check can take up to a minute while the server wakes up…");
- fetch("/check?address="+encodeURIComponent(a)).then(function(r){if(!r.ok)throw 0;return r.json()})
-  .then(function(d){show(d);again.hidden=true})
-  .catch(function(){say("Couldn’t reach the server. Try again in a moment.")})}
-document.getElementById("addrgo").addEventListener("click",byAddress);
-go.addEventListener("click",check);again.addEventListener("click",check);
+var out = document.getElementById("out");
+var go = document.getElementById("go");
+var spot = null;
+var timers = [];
+var nag = null;
+var audioCtx = null;
+var KEY = "la-park-v1";
+
+function esc(s){return String(s == null ? "" : s).replace(/[&<>"]/g, function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function say(t){out.innerHTML = '<div class="box">'+esc(t)+'</div>'}
+function fmtMin(m){
+  var h24 = Math.floor((m % 1440) / 60), mi = m % 60, ap = h24 < 12 ? "AM" : "PM", h = h24 % 12 || 12;
+  return h + ":" + (mi < 10 ? "0" : "") + mi + " " + ap;
+}
+function fmtDate(iso){
+  var p = iso.split("-");
+  return new Date(Date.UTC(+p[0], +p[1]-1, +p[2])).toLocaleDateString("en-US", {weekday:"short", month:"short", day:"numeric", timeZone:"UTC"});
+}
+function tag(status){return {ok:"OK", limit:"Limit", no:"No", permit:"Permit", unknown:"?"}[status] || status}
+function standalone(){return navigator.standalone === true || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)}
+function unlock(){
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch (e) {}
+}
+function beep(){
+  unlock();
+  if (!audioCtx) return;
+  function tone(freq, at, dur){
+    var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = freq; o.connect(g); g.connect(audioCtx.destination);
+    var t = audioCtx.currentTime + at;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.35, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.start(t); o.stop(t + dur);
+  }
+  tone(880, 0, 0.22); tone(880, 0.32, 0.22); tone(988, 0.64, 0.4);
+  if (navigator.vibrate) navigator.vibrate([180, 80, 180, 80, 360]);
+}
+function clearTimers(){timers.forEach(clearTimeout); timers = []; if (nag){clearInterval(nag); nag = null}}
+function checkedDays(name){
+  return Array.prototype.map.call(document.querySelectorAll('input[name="'+name+'"]:checked'), function(el){return +el.value})
+}
+function readWindows(prefix){
+  var rows = [];
+  document.querySelectorAll('[data-window="'+prefix+'"]').forEach(function(row){
+    var days = checkedDays(row.getAttribute("data-days"));
+    var start = row.querySelector(".wstart").value, end = row.querySelector(".wend").value;
+    if (!start && !end) return;
+    if (!days.length || !start || !end) throw new Error("Add the days and both hours from the sign.");
+    rows.push({days: days, start: toMin(start), end: toMin(end)});
+  });
+  return rows;
+}
+function toMin(v){var p = v.split(":"); return (+p[0])*60 + (+p[1])}
+function readSign(){
+  var sign = {}, lim = document.getElementById("limit").value;
+  if (lim !== "") sign.time_limit_min = +lim;
+  var ls = document.getElementById("lstart").value, le = document.getElementById("lend").value;
+  if (ls) sign.limit_start = toMin(ls);
+  if (le) sign.limit_end = toMin(le);
+  var days = checkedDays("limit-days");
+  if (days.length) sign.limit_days = days;
+  var rate = document.getElementById("rate").value.trim();
+  if (rate) sign.rate = rate;
+  sign.sweeping = readWindows("sweep");
+  sign.tow = readWindows("tow");
+  sign.permit = readWindows("permit");
+  sign.red_curb = document.getElementById("red").checked;
+  sign.holidays_enforced = document.getElementById("holen").checked;
+  var used = lim !== "" || sign.sweeping.length || sign.tow.length || sign.permit.length || sign.red_curb;
+  return used ? sign : null;
+}
+function dayChecks(name, selected){
+  var names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  return names.map(function(n, i){
+    var on = selected.indexOf(i) >= 0 ? " checked" : "";
+    return '<label><input type="checkbox" name="'+name+'" value="'+i+'"'+on+'>'+n+'</label>';
+  }).join("");
+}
+function windowRow(prefix, daysName, days){
+  return '<div class="box" data-window="'+prefix+'" data-days="'+daysName+'"><div class="chips">'+dayChecks(daysName, days)+
+    '</div><div class="row"><label>From<input class="wstart" type="time"></label><label>To<input class="wend" type="time"></label></div></div>';
+}
+function show(d, gpsNote){
+  spot = d;
+  var cls = {ok:"ok", limit:"limit", permit:"permit", no:"no"}[d.status] || "unknown";
+  var h = '<div class="sign '+cls+'" id="answer" tabindex="-1"><span class="word">'+esc(d.answer_word || "Unknown")+'</span>';
+  h += '<p>'+esc(d.headline || "")+'</p>';
+  if (d.status === "no" || d.status === "permit") {
+    h += '<p>'+(d.restriction_until_text ? "Until "+esc(d.restriction_until_text)+"." : "This restriction does not lift in the next week.")+'</p>';
+  } else if (d.move_by_text && d.move_by_text !== "Not in the data") {
+    h += '<p>Move by '+esc(d.move_by_text)+'.</p>';
+  }
+  if (d.segment) h += '<p>Curb: '+esc(d.segment)+(d.space_id ? " · space "+esc(d.space_id) : "")+'</p>';
+  if (d.distance_m != null) h += '<p>'+(d.distance_m < 8 ? "You are at this meter." : "About "+esc(d.distance_m)+" m from this meter.")+'</p>';
+  if (d.searched) h += '<p>Searched near '+esc(d.searched)+'.</p>';
+  h += '</div>';
+  var facts = d.facts || {};
+  h += '<div class="facts"><div><span>Time limit</span><b>'+esc(facts.time_limit || "Not in the city data")+'</b></div>';
+  h += '<div><span>Meter</span><b>'+esc(facts.meter || "No meter nearby")+'</b></div></div>';
+  if (d.lat != null) {
+    if (d.status === "permit") {
+      h += '<button id="have" type="button">I have the permit — check again</button>';
+      h += '<button id="park" class="alt" type="button">I don’t — alarm now</button>';
+    } else if (d.status === "no") {
+      h += '<button id="park" type="button">I’m already parked — alarm now</button>';
+    } else {
+      h += '<button id="park" type="button">I parked here</button>';
+    }
+  }
+  if (gpsNote) h += '<div class="box warn">'+esc(gpsNote)+'</div>';
+  (d.warnings || []).forEach(function(w){h += '<div class="box warn">'+esc(w)+'</div>'});
+  (d.gaps || []).forEach(function(g){h += '<div class="box">'+esc(g.text)+'</div>'});
+  if (d.timeline && d.timeline.length){
+    h += '<h2>Today and the next days</h2>';
+    d.timeline.forEach(function(day){
+      h += '<section class="day box"><h3>'+esc(fmtDate(day.date));
+      if (day.holiday) h += ' · '+esc(day.holiday);
+      else if (day.sweep_holiday && day.sweep_holiday !== day.holiday) h += ' · '+esc(day.sweep_holiday);
+      h += '</h3><div class="bar" aria-hidden="true">';
+      (day.segments || []).forEach(function(s){
+        h += '<i class="'+esc(s.status)+'" style="width:'+((s.end_min-s.start_min)/14.4)+'%"></i>';
+      });
+      h += '</div><ul class="segs">';
+      (day.segments || []).forEach(function(s){
+        h += '<li><span class="tag '+esc(s.status)+'">'+esc(tag(s.status))+'</span><span>'+
+          esc(fmtMin(s.start_min))+' – '+esc(fmtMin(s.end_min))+' · '+esc(s.label)+'</span></li>';
+      });
+      h += '</ul></section>';
+    });
+  }
+  h += signForm(d);
+  h += '<p class="small">'+esc(d.coverage || "")+' '+esc(d.disclaimer || "")+'</p>';
+  if (d.sources && d.sources.length){
+    h += '<details><summary>Where this comes from</summary><ul>';
+    d.sources.forEach(function(s){h += '<li><a href="'+esc(s.url)+'">'+esc(s.name)+'</a></li>'});
+    h += '</ul></details>';
+  }
+  out.innerHTML = h;
+  var answer = document.getElementById("answer");
+  if (answer) answer.focus();
+  var park = document.getElementById("park");
+  if (park) park.addEventListener("click", function(){savePark(false)});
+  var have = document.getElementById("have");
+  if (have) have.addEventListener("click", function(){recheck(true)});
+  document.getElementById("apply").addEventListener("click", function(){recheck(false)});
+}
+function signForm(d){
+  var open = d.status === "unknown" ? " open" : "";
+  return '<details id="signbox"'+open+'><summary>What does the sign say?</summary>'+
+    '<label for="limit">Time limit</label><select id="limit"><option value="">Not sure</option><option value="0">No time limit</option>'+
+    '<option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option>'+
+    '<option value="120">2 hours</option><option value="240">4 hours</option></select>'+
+    '<p class="hint">Days the limit is enforced. Leave them blank for every day.</p><div class="chips">'+dayChecks("limit-days", [])+'</div>'+
+    '<div class="row"><label>From<input id="lstart" type="time"></label><label>To<input id="lend" type="time"></label></div>'+
+    '<label for="rate">Meter price, if you can see it</label><input id="rate" type="text" inputmode="decimal" placeholder="$1.50 per hour">'+
+    '<h2>Street sweeping</h2>'+windowRow("sweep", "sweep-days", [])+
+    '<h2>Tow-away or rush hour</h2><p class="hint">Many signs have a morning window and an evening window.</p>'+
+    windowRow("tow", "tow-days-1", [0,1,2,3,4])+windowRow("tow", "tow-days-2", [0,1,2,3,4])+
+    '<h2>Permit hours</h2>'+windowRow("permit", "permit-days", [0,1,2,3,4,5,6])+
+    '<label class="checkline"><input id="red" type="checkbox"> Red curb, or no parking at any time</label>'+
+    '<label class="checkline"><input id="holen" type="checkbox"> The sign says holidays are enforced</label>'+
+    '<button id="apply" class="alt" type="button">Use this sign</button></details>';
+}
+function payload(hasPermit){
+  var sign = null;
+  try { sign = readSign(); } catch (e) { window.alert(e.message); return null; }
+  var body = {lat: spot.lat, lng: spot.lng, sign: sign, has_permit: !!hasPermit};
+  if (spot.searched) body.address = document.getElementById("addr").value.trim();
+  return body;
+}
+function recheck(hasPermit){
+  var body = payload(hasPermit);
+  if (!body) return;
+  say("Checking again…");
+  fetch("/check", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)})
+    .then(function(r){if(!r.ok) throw 0; return r.json()})
+    .then(function(d){d.lat = body.lat; d.lng = body.lng; show(d)})
+    .catch(function(){say("Couldn’t reach the server. Try again in a moment.")});
+}
+function savePark(){
+  unlock();
+  var body = payload(false);
+  if (!body) return;
+  say("Saving this spot…");
+  var sub = null;
+  try { sub = JSON.parse(localStorage.getItem("la-park-sub") || "null"); } catch (e) {}
+  if (sub) body.subscription = sub;
+  fetch("/park", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)})
+    .then(function(r){if(!r.ok) throw 0; return r.json()})
+    .then(function(d){
+      var saved = {id:d.id, alarm_at:d.alarm_at, reason:d.reason, headline:d.headline, address:d.address || d.segment,
+        lat:body.lat, lng:body.lng, sign:body.sign, has_permit:body.has_permit};
+      localStorage.setItem(KEY, JSON.stringify(saved));
+      showParked(saved);
+    })
+    .catch(function(){say("Couldn’t save the spot. Try again in a moment.")});
+}
+function showParked(saved){
+  clearTimers();
+  var when = saved.alarm_at ? new Date(saved.alarm_at) : null;
+  var h = '<section class="box" id="parked"><p class="eyebrow">Parked'+(saved.address ? " · "+esc(saved.address) : "")+'</p>';
+  if (!when) {
+    h += '<p class="count">No deadline</p><p>The city data has no time to move the car. Enter what the sign says, then park again.</p>';
+  } else {
+    h += '<p class="eyebrow">Move the car in</p><p class="count" id="count">–</p><p id="countwhy">'+esc(saved.reason || saved.headline || "")+'</p>';
+  }
+  if (when) {
+    h += '<a class="btn" id="ics" href="/park/'+esc(saved.id)+'.ics">Add to Calendar</a>';
+    h += '<p class="hint">Calendar alarms: 15 minutes before, 5 minutes before, and at the deadline. This still rings if the server is asleep.</p>';
+  }
+  h += '<button id="push" class="alt" type="button">Allow iPhone alerts</button>';
+  h += '<p id="pushmsg" class="hint"></p>';
+  h += '<button id="silence" class="alt" type="button" hidden>Silence the beep</button>';
+  h += '<button id="moved" class="alt" type="button">I moved the car</button>';
+  h += '<div id="banner"></div></section>';
+  out.innerHTML = h;
+  var ics = document.getElementById("ics");
+  if (ics) ics.addEventListener("click", unlock);
+  document.getElementById("push").addEventListener("click", enablePush);
+  document.getElementById("moved").addEventListener("click", moved);
+  document.getElementById("silence").addEventListener("click", function(){clearTimers(); this.hidden = true});
+  if (!when) return;
+  function fire(mins){
+    var banner = document.getElementById("banner");
+    var text = mins === 0 ? "Move the car now." : "Move the car in "+mins+" minutes.";
+    if (banner) banner.innerHTML = '<div class="alarm" role="alert"><strong>'+esc(text)+'</strong><p>'+esc(saved.reason || "")+'</p></div>';
+    document.getElementById("silence").hidden = false;
+    beep();
+    if (mins === 0 && !nag) nag = setInterval(beep, 20000);
+  }
+  function tick(){
+    var el = document.getElementById("count");
+    if (!el) return;
+    var ms = when.getTime() - Date.now();
+    if (ms <= 0) { el.textContent = "Now"; document.title = "Move the car now"; return; }
+    var s = Math.floor(ms / 1000), hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
+    var pad = function(n){return (n < 10 ? "0" : "") + n};
+    el.textContent = (hh ? hh + ":" : "") + pad(mm) + ":" + pad(ss);
+    document.title = el.textContent + " · Move car";
+  }
+  tick();
+  timers.push(setInterval(tick, 1000));
+  [15, 5, 0].forEach(function(mins){
+    var delay = when.getTime() - mins * 60000 - Date.now();
+    if (delay < -20000) return;
+    if (delay < 0) delay = 0;
+    timers.push(setTimeout(function(){fire(mins)}, delay));
+  });
+}
+function moved(){
+  clearTimers();
+  document.title = "Can I park here?";
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
+  localStorage.removeItem(KEY);
+  if (saved && saved.id) fetch("/park/"+saved.id+"/cancel", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+  say("Cleared. Check the next spot when you park again.");
+}
+function enablePush(){
+  unlock();
+  var ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  var safari = /Safari/.test(navigator.userAgent) && !/CriOS|FxiOS|EdgiOS/.test(navigator.userAgent);
+  function pushNote(t){var el = document.getElementById("pushmsg"); if (el) el.textContent = t; else say(t)}
+  if (ios && !safari && !standalone()) { pushNote("Open this page in Safari, then use Share → Add to Home Screen."); return; }
+  if (!standalone()) { pushNote("Add Park LA to your home screen first, open it from the icon, then allow alerts. iOS only delivers web alerts to an installed app."); return; }
+  if (!("Notification" in window) || !("PushManager" in window)) { pushNote("This iPhone can’t show web alerts. Use Add to Calendar instead."); return; }
+  Notification.requestPermission().then(function(perm){
+    if (perm !== "granted") { pushNote("Alerts are blocked. Use Add to Calendar, or turn notifications on in iPhone Settings for this app."); return; }
+    return fetch("/push/public-key").then(function(r){return r.json()}).then(function(key){
+      if (!key.publicKey) { pushNote("Alerts aren’t turned on for the server yet. Add to Calendar still works."); return; }
+      return navigator.serviceWorker.ready.then(function(reg){
+        return reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:b64ToBuf(key.publicKey)});
+      }).then(function(sub){
+        var json = sub.toJSON();
+        localStorage.setItem("la-park-sub", JSON.stringify(json));
+        var saved = JSON.parse(localStorage.getItem(KEY) || "null");
+        return fetch("/push/subscribe", {method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({subscription: json, park_id: saved && saved.id})});
+      }).then(function(){pushNote("Alerts are on. You’ll get a notice 15 minutes before, 5 minutes before, and at the deadline, when the server is awake.")});
+    });
+  }).catch(function(){pushNote("Couldn’t turn on alerts. Use Add to Calendar.")});
+}
+function b64ToBuf(s){
+  var pad = "=".repeat((4 - s.length % 4) % 4);
+  var b = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  var a = new Uint8Array(b.length);
+  for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+  return a;
+}
+function checkGps(){
+  go.disabled = true;
+  say("Finding your location…");
+  if (!navigator.geolocation) { say("This browser can’t share your location. Type an address instead."); go.disabled = false; return; }
+  navigator.geolocation.getCurrentPosition(function(p){
+    var note = p.coords.accuracy > 40 ? "GPS accuracy is about "+Math.round(p.coords.accuracy)+" m. Confirm you’re on the right block." : "";
+    say("Checking Los Angeles rules. The first check can take a minute while the server wakes up…");
+    fetch("/check?lat="+encodeURIComponent(p.coords.latitude)+"&lng="+encodeURIComponent(p.coords.longitude))
+      .then(function(r){if(!r.ok) throw 0; return r.json()})
+      .then(function(d){d.lat = p.coords.latitude; d.lng = p.coords.longitude; show(d, note); go.disabled = false; go.textContent = "Check this spot"})
+      .catch(function(){say("Couldn’t reach the server. Try again in a moment."); go.disabled = false});
+  }, function(){
+    say("Location is off or blocked. In iPhone Settings, allow Location for Safari websites, then try again. Or type an address.");
+    go.disabled = false;
+  }, {enableHighAccuracy:true, timeout:15000, maximumAge:10000});
+}
+function byAddress(){
+  var a = document.getElementById("addr").value.trim();
+  if (!a) { say("Type an address first."); return; }
+  say("Checking Los Angeles rules. The first check can take a minute while the server wakes up…");
+  fetch("/check?address="+encodeURIComponent(a)).then(function(r){if(!r.ok) throw 0; return r.json()})
+    .then(function(d){
+      if (d.lat == null && d.status === "unknown") { say(d.headline || "Couldn’t find that address."); return; }
+      show(d);
+    })
+    .catch(function(){say("Couldn’t reach the server. Try again in a moment.")});
+}
+function restore(){
+  var params = new URLSearchParams(location.search);
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
+  var id = params.get("park");
+  if (id && (!saved || saved.id !== id)) {
+    fetch("/park/"+id).then(function(r){if(!r.ok) throw 0; return r.json()}).then(function(row){
+      if (!row || row.cancelled || !row.move_by) return;
+      showParked({id: row.id, alarm_at: row.move_by, reason: row.reason, headline: row.headline, address: row.address, lat: row.lat, lng: row.lng});
+    }).catch(function(){});
+    return;
+  }
+  if (!saved || !saved.alarm_at) return;
+  if (new Date(saved.alarm_at).getTime() < Date.now() - 60*60*1000) return;
+  showParked(saved);
+  fetch("/park/"+saved.id).then(function(r){
+    if (r.status !== 404) return;
+    return fetch("/park", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
+      lat: saved.lat, lng: saved.lng, sign: saved.sign, has_permit: saved.has_permit
+    })}).then(function(res){return res.json()}).then(function(d){
+      if (!d.id) return;
+      saved.id = d.id; saved.alarm_at = d.alarm_at || saved.alarm_at;
+      localStorage.setItem(KEY, JSON.stringify(saved));
+    });
+  }).catch(function(){});
+}
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(function(){});
+go.addEventListener("click", checkGps);
+document.getElementById("addrgo").addEventListener("click", byAddress);
+document.getElementById("addr").addEventListener("keydown", function(e){if(e.key==="Enter") byAddress()});
+restore();
 </script>
 </body>
 </html>

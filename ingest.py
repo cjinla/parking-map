@@ -7,7 +7,8 @@ DB = "parking.db"
 METERS = "https://data.lacity.org/resource/s49e-q6j2.json?$limit=50000"
 SWEEP = ("https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/ArcGIS/rest/services/"
          "Biweekly_Routes_2021/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=geojson")
-PPD = "https://data.lacity.org/resource/s3st-6nwi.geojson?$limit=5000"
+PPD = "https://data.lacity.org/resource/s3st-6nwi.json?$limit=2000"
+POSTED = "https://data.lacity.org/resource/krk7-ayq2.json?$limit=5000"
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 def get(url):
@@ -86,18 +87,54 @@ def parse_hours(txt):
         if a is not None and b is not None: return a, b
     return 0, 1440
 
+# Longest suffix first so "TH" is not eaten by a shorter token, and the route id keeps >= 4 characters.
+_ROUTE_DAYS = (
+    ("THURS", 3), ("THUR", 3), ("THU", 3), ("TUES", 1), ("TUE", 1),
+    ("SATURDAY", 5), ("SUNDAY", 6), ("MONDAY", 0), ("WEDNESDAY", 2), ("FRIDAY", 4),
+    ("SAT", 5), ("SUN", 6), ("MON", 0), ("WED", 2), ("FRI", 4),
+    ("TH", 3), ("TU", 1), ("SA", 5), ("SU", 6), ("M", 0), ("W", 2), ("F", 4),
+)
+
+def split_route(route_no):
+    """'10P136 Th' -> ('10P136', 3). Routes with no day suffix return (id, None)."""
+    raw = re.sub(r"[^A-Za-z0-9]", "", route_no or "").upper()
+    for suf, day in _ROUTE_DAYS:
+        if raw.endswith(suf) and len(raw) - len(suf) >= 4:
+            return raw[:-len(suf)], day
+    return raw, None
+
+def index_posted(rows):
+    """Posted sweeping rows -> {route_id: [{days, start, end}, ...]}. Same hours share one window."""
+    buckets = {}
+    for rec in rows or []:
+        base, day = split_route(rec.get("route_no") or rec.get("route") or "")
+        if not base or day is None:
+            continue
+        a, b = mins(rec.get("time_start") or ""), mins(rec.get("time_end") or "")
+        if a is None or b is None or a == b:
+            continue
+        group = buckets.setdefault(base, {}).setdefault((a, b), [])
+        if day not in group:
+            group.append(day)
+    return {base: [{"days": sorted(days), "start": a, "end": b} for (a, b), days in sorted(groups.items())]
+            for base, groups in buckets.items()}
+
 def meter_rules(rec):
-    """The city's public feed has a limit but no enforced hours, so hours_known stays False
-    unless a future version of the data adds them."""
-    lim = parse_limit(rec.get("timelimit"))
+    """The city's public feed has a limit and a price, but no enforced hours, so hours_known stays False
+    unless a future version of the data adds them. Meter limits are suspended on LADOT holidays."""
+    lim = parse_limit(rec.get("timelimit") or rec.get("meteredtimelimit"))
     hrs = rec.get("operatinghours") or rec.get("operating_hours") or rec.get("meter_hours")
     a, b = parse_hours(hrs)
     known = bool(hrs) and (a, b) != (0, 1440)
     if not lim: return []
     label = f"{lim}-minute limit" if lim < 60 else f"{lim // 60}-hour limit"
+    rate = str(rec.get("raterange") or rec.get("rate_range") or "").strip()
+    rate_type = str(rec.get("ratetype") or rec.get("rate_type") or "").strip().upper()
     return [{"kind": "limit", "days": [0, 1, 2, 3, 4, 5, 6], "start": a, "end": b, "label": label,
              "limit_min": lim, "source": "LADOT meter inventory",
-             "confidence": "high" if known else "low", "hours_known": known}]
+             "confidence": "high" if known else "low", "hours_known": known,
+             "skip_holidays": True, "also_sweep_holidays": False,
+             "rate": rate, "rate_type": rate_type, "topic": "meter"}]
 
 def flat(c):
     """Yield every [lng, lat] pair in nested GeoJSON coordinates."""
@@ -120,31 +157,45 @@ def load():
             db.execute("INSERT INTO meters VALUES(?,?,?,?,?)",
                        (rec.get("spaceid"), p[0], p[1], rec.get("blockface") or "", json.dumps(meter_rules(rec))))
             n += 1
-    s = 0
+    posted = {}
+    try:
+        posted = index_posted(get(POSTED))
+        print(f"Posted sweeping schedules: {len(posted)} routes with hours", flush=True)
+    except Exception as e:
+        print("Warning: posted sweeping times not loaded:", e)
+    s = matched = 0
     types = {}
     for i, f in enumerate(sweep_features()):
         g = f.get("geometry") or {}
         types[g.get("type")] = types.get(g.get("type"), 0) + 1
-        if i == 0: print("Sample sweeping properties:", json.dumps(f.get("properties"))[:400], flush=True)
+        props = dict(f.get("properties") or {})
+        if i == 0: print("Sample sweeping properties:", json.dumps(props)[:400], flush=True)
         if g.get("type") not in ("Polygon", "MultiPolygon", "LineString", "MultiLineString"): continue
+        base, _day = split_route(props.get("Route") or props.get("route") or "")
+        if base and base in posted:
+            props["posted_times"] = posted[base]
+            matched += 1
         pts = list(flat(g["coordinates"]))
         pad = 0.0004   # about 40 m, so streets (lines) still match nearby points
         db.execute("INSERT INTO sweep VALUES(?,?,?,?,?,?,?)",
-                   (i, json.dumps(f["properties"]), json.dumps(g),
+                   (i, json.dumps(props), json.dumps(g),
                     min(p[1] for p in pts) - pad, max(p[1] for p in pts) + pad,
                     min(p[0] for p in pts) - pad, max(p[0] for p in pts) + pad))
         s += 1
-    print("Sweeping geometry types:", types, flush=True)
+    print("Sweeping geometry types:", types, "routes with posted hours attached:", matched, flush=True)
     db.execute("DROP TABLE IF EXISTS ppd")
     db.execute("CREATE TABLE ppd(props TEXT, geom TEXT, minlat REAL, maxlat REAL, minlng REAL, maxlng REAL)")
     p = 0
     try:                       # permit districts are optional: a failure here must not break the rest
-        for f in get(PPD)["features"]:
+        raw = get(PPD)
+        feats = raw["features"] if isinstance(raw, dict) else [
+            {"properties": {"ppdnum": rec.get("ppdnum"), "ppdname": rec.get("ppdname")},
+             "geometry": rec.get("the_geom") or rec.get("geometry")} for rec in raw]
+        for f in feats:
             g = f.get("geometry") or {}
             if g.get("type") not in ("Polygon", "MultiPolygon"): continue
-            rings = g["coordinates"] if g["type"] == "Polygon" else [r for poly in g["coordinates"] for r in poly]
-            pts = [pt for ring in rings for pt in ring]
-            db.execute("INSERT INTO ppd VALUES(?,?,?,?,?,?)", (json.dumps(f["properties"]), json.dumps(g),
+            pts = list(flat(g["coordinates"]))
+            db.execute("INSERT INTO ppd VALUES(?,?,?,?,?,?)", (json.dumps(f.get("properties") or {}), json.dumps(g),
                        min(q[1] for q in pts), max(q[1] for q in pts), min(q[0] for q in pts), max(q[0] for q in pts)))
             p += 1
     except Exception as e:

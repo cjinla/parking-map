@@ -5,3 +5,13 @@ services:
     plan: free
     buildCommand: pip install -r requirements.txt && python ingest.py
     startCommand: python server.py
+    envVars:
+      # Generate with: python vapid_keys.py
+      # Paste the values in the Render dashboard. Do not commit them.
+      # sync: false keeps dashboard values from being wiped on the next blueprint sync.
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
