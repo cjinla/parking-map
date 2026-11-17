@@ -14,12 +14,23 @@ self.addEventListener("push", function (event) {
   } catch (e) {
     data = {title: "Move your car", body: event.data ? event.data.text() : "Time to move the car."};
   }
-  event.waitUntil(self.registration.showNotification(data.title || "Move your car", {
+  var urgent = data.level === "final" || data.urgent;
+  var note = {
     body: data.body || "Time to move the car.",
     tag: data.tag || "move-car",
     renotify: true,
-    data: {url: data.url || "/"}
-  }));
+    requireInteraction: !!data.requireInteraction,
+    vibrate: data.vibrate || (urgent ? [500, 200, 500, 200, 700] : [200, 100, 200]),
+    data: {url: data.url || "/", level: data.level || "soon"}
+  };
+  event.waitUntil(Promise.all([
+    self.registration.showNotification(data.title || "Move your car", note),
+    self.clients.matchAll({type: "window", includeUncontrolled: true}).then(function (list) {
+      list.forEach(function (client) {
+        client.postMessage({type: "alarm", level: urgent ? "final" : "soon", title: data.title, body: data.body});
+      });
+    })
+  ]));
 });
 
 self.addEventListener("notificationclick", function (event) {

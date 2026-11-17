@@ -11,7 +11,17 @@ from zoneinfo import ZoneInfo
 SESSION_DB = os.environ.get("SESSION_DB", "sessions.db")
 TZ = ZoneInfo("America/Los_Angeles")
 LOCK = threading.Lock()
-REMINDERS = ((15, "15"), (5, "5"), (0, "now"))
+# Defaults: 15 and 5 minutes before, an urgent alert at the deadline, then a
+# repeat every 3 minutes until 15 minutes after the deadline or the driver responds.
+DEFAULT_SETTINGS = {
+    "lead_minutes": [15, 5],
+    "repeat_minutes": 3,
+    "repeat_for_minutes": 15,
+    "night_hour": 20,
+    "morning_hour": 7,
+    "early_before_hour": 10,
+    "snooze_minutes": 10,
+}
 # Device tokens are created on the phone and stored only in sessions.db. Never commit one.
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 
@@ -24,30 +34,131 @@ def connect():
       CREATE TABLE IF NOT EXISTS parks (
         id TEXT PRIMARY KEY, lat REAL, lng REAL, address TEXT, move_by TEXT,
         reason TEXT, headline TEXT, sub_id TEXT, created TEXT, cancelled INTEGER DEFAULT 0,
-        device_token TEXT);
+        device_token TEXT, settings TEXT, snooze_until TEXT);
       CREATE TABLE IF NOT EXISTS reminders (
         id INTEGER PRIMARY KEY AUTOINCREMENT, park_id TEXT, fire_at TEXT, kind TEXT, sent INTEGER DEFAULT 0);
       CREATE TABLE IF NOT EXISTS devices (
-        token TEXT PRIMARY KEY, sub_id TEXT, created TEXT);
+        token TEXT PRIMARY KEY, sub_id TEXT, created TEXT, settings TEXT);
     """)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(parks)")}
     if "device_token" not in cols:
         conn.execute("ALTER TABLE parks ADD COLUMN device_token TEXT")
+    if "settings" not in cols:
+        conn.execute("ALTER TABLE parks ADD COLUMN settings TEXT")
+    if "snooze_until" not in cols:
+        conn.execute("ALTER TABLE parks ADD COLUMN snooze_until TEXT")
+    dcols = {row[1] for row in conn.execute("PRAGMA table_info(devices)")}
+    if "settings" not in dcols:
+        conn.execute("ALTER TABLE devices ADD COLUMN settings TEXT")
     return conn
+
+
+def clean_settings(raw):
+    """Clamp a settings object. Unknown or out-of-range values fall back to defaults."""
+    s = {
+        "lead_minutes": list(DEFAULT_SETTINGS["lead_minutes"]),
+        "repeat_minutes": DEFAULT_SETTINGS["repeat_minutes"],
+        "repeat_for_minutes": DEFAULT_SETTINGS["repeat_for_minutes"],
+        "night_hour": DEFAULT_SETTINGS["night_hour"],
+        "morning_hour": DEFAULT_SETTINGS["morning_hour"],
+        "early_before_hour": DEFAULT_SETTINGS["early_before_hour"],
+        "snooze_minutes": DEFAULT_SETTINGS["snooze_minutes"],
+    }
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = None
+    if not isinstance(raw, dict):
+        return s
+    leads = []
+    for n in raw.get("lead_minutes") or []:
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= n <= 180 and n not in leads:
+            leads.append(n)
+    if leads:
+        s["lead_minutes"] = sorted(leads, reverse=True)
+    for key, lo, hi in (
+        ("repeat_minutes", 1, 30), ("repeat_for_minutes", 0, 180),
+        ("night_hour", 0, 23), ("morning_hour", 0, 23),
+        ("early_before_hour", 0, 12), ("snooze_minutes", 1, 60),
+    ):
+        if key not in raw or raw[key] is None:
+            continue
+        try:
+            v = int(raw[key])
+        except (TypeError, ValueError):
+            continue
+        if lo <= v <= hi:
+            s[key] = v
+    return s
+
+
+def restriction_family(reason):
+    text = (reason or "").lower()
+    if "sweep" in text:
+        return "sweep"
+    if "tow" in text or "rush" in text:
+        return "tow"
+    return ""
+
+
+def _at(moment, hour):
+    return moment.replace(hour=hour, minute=0, second=0, microsecond=0)
+
+
+def plan_alerts(move_by, now, reason="", settings=None):
+    """Lead alerts, the deadline, and night-before / morning alerts for sweeping and tow-away."""
+    s = clean_settings(settings)
+    out = []
+    family = restriction_family(reason)
+    if family and s["night_hour"] is not None:
+        night = _at(move_by, s["night_hour"]) - timedelta(days=1)
+        if night >= now - timedelta(seconds=5) and night < move_by:
+            out.append({"at": night, "kind": "night", "minutes_before": None, "level": "soon"})
+    if family and s["morning_hour"] is not None and move_by.hour < s["early_before_hour"]:
+        morning = _at(move_by, s["morning_hour"])
+        if morning >= move_by:
+            morning = move_by - timedelta(hours=1)
+        if morning >= now - timedelta(seconds=5) and morning < move_by:
+            out.append({"at": morning, "kind": "morning", "minutes_before": None, "level": "soon"})
+    for minutes in s["lead_minutes"]:
+        fire = move_by - timedelta(minutes=minutes)
+        if fire >= now - timedelta(seconds=5):
+            out.append({"at": fire, "kind": str(minutes), "minutes_before": minutes, "level": "soon"})
+    if move_by >= now - timedelta(seconds=5):
+        out.append({"at": move_by, "kind": "now", "minutes_before": 0, "level": "final"})
+    out.sort(key=lambda item: item["at"])
+    kept = []
+    for item in out:
+        if item["kind"] in ("night", "morning") and any(
+                abs(item["at"] - other["at"]) < timedelta(minutes=10) for other in kept):
+            continue
+        kept.append(item)
+    return kept
+
+
+def reminder_times(move_by, now, reason="", settings=None):
+    """Scheduled alerts that are still in the future. Repeats are added when the deadline alert is sent."""
+    return plan_alerts(move_by, now, reason, settings)
+
+
+def next_repeat(deadline, now, settings=None):
+    """Next urgent repeat, or None once the post-deadline window has passed."""
+    s = clean_settings(settings)
+    if not deadline or s["repeat_minutes"] <= 0 or s["repeat_for_minutes"] <= 0:
+        return None
+    nxt = now + timedelta(minutes=s["repeat_minutes"])
+    if nxt <= deadline + timedelta(minutes=s["repeat_for_minutes"]):
+        return nxt
+    return None
 
 
 def valid_token(token):
     return bool(TOKEN_RE.match(token or ""))
-
-
-def reminder_times(move_by, now):
-    """15 min, 5 min, and the deadline. Times already past are omitted."""
-    out = []
-    for minutes, kind in REMINDERS:
-        fire = move_by - timedelta(minutes=minutes)
-        if fire >= now - timedelta(seconds=5):
-            out.append({"at": fire, "kind": kind, "minutes_before": minutes})
-    return out
 
 
 def upsert_sub(sub):
@@ -71,29 +182,32 @@ def upsert_sub(sub):
     return sid
 
 
-def save_park(lat, lng, address, move_by, reason, headline, sub_id, now, device_token=None):
+def save_park(lat, lng, address, move_by, reason, headline, sub_id, now, device_token=None, settings=None):
     """move_by is an aware datetime or None. Reminders are skipped when there is no deadline."""
     pid = uuid.uuid4().hex
-    fires = reminder_times(move_by, now) if move_by else []
+    cleaned = clean_settings(settings)
+    fires = plan_alerts(move_by, now, reason, cleaned) if move_by else []
     with LOCK:
         conn = connect()
         conn.execute("""INSERT INTO parks
-            (id, lat, lng, address, move_by, reason, headline, sub_id, created, cancelled, device_token)
-            VALUES (?,?,?,?,?,?,?,?,?,0,?)""", (
+            (id, lat, lng, address, move_by, reason, headline, sub_id, created, cancelled, device_token, settings, snooze_until)
+            VALUES (?,?,?,?,?,?,?,?,?,0,?,?,NULL)""", (
             pid, lat, lng, address or "", move_by.isoformat() if move_by else None,
-            reason or "", headline or "", sub_id, now.isoformat(), device_token))
+            reason or "", headline or "", sub_id, now.isoformat(), device_token, json.dumps(cleaned)))
         for item in fires:
             conn.execute("INSERT INTO reminders(park_id, fire_at, kind, sent) VALUES(?,?,?,0)",
                          (pid, item["at"].isoformat(), item["kind"]))
         conn.commit()
     return {"id": pid, "alarm_at": move_by.isoformat() if move_by else None,
-            "reminders": [{"at": i["at"].isoformat(), "kind": i["kind"], "minutes_before": i["minutes_before"]} for i in fires]}
+            "reminders": [{"at": i["at"].isoformat(), "kind": i["kind"], "minutes_before": i["minutes_before"],
+                           "level": i["level"]} for i in fires]}
 
 
-def ensure_device(token=None, sub=None):
+def ensure_device(token=None, sub=None, settings=None):
     """Return this phone's token, creating it if needed. A token the phone already
     holds is stored again after a server restart so the Shortcut keeps working."""
     sub_id = upsert_sub(sub) if sub else None
+    stored = json.dumps(clean_settings(settings)) if settings else None
     with LOCK:
         conn = connect()
         if valid_token(token):
@@ -101,13 +215,17 @@ def ensure_device(token=None, sub=None):
             if row:
                 if sub_id and sub_id != row[1]:
                     conn.execute("UPDATE devices SET sub_id=? WHERE token=?", (sub_id, token))
-                    conn.commit()
+                if stored:
+                    conn.execute("UPDATE devices SET settings=? WHERE token=?", (stored, token))
+                conn.commit()
                 return token
-            conn.execute("INSERT INTO devices VALUES(?,?,?)", (token, sub_id, datetime.now(TZ).isoformat()))
+            conn.execute("INSERT INTO devices (token, sub_id, created, settings) VALUES(?,?,?,?)",
+                         (token, sub_id, datetime.now(TZ).isoformat(), stored))
             conn.commit()
             return token
         fresh = secrets.token_urlsafe(32)
-        conn.execute("INSERT INTO devices VALUES(?,?,?)", (fresh, sub_id, datetime.now(TZ).isoformat()))
+        conn.execute("INSERT INTO devices (token, sub_id, created, settings) VALUES(?,?,?,?)",
+                     (fresh, sub_id, datetime.now(TZ).isoformat(), stored))
         conn.commit()
         return fresh
 
@@ -122,7 +240,8 @@ def rotate_device(old, sub=None):
             if prev and not sub_id:
                 sub_id = prev[0]
             conn.execute("DELETE FROM devices WHERE token=?", (old,))
-        conn.execute("INSERT INTO devices VALUES(?,?,?)", (fresh, sub_id, datetime.now(TZ).isoformat()))
+        conn.execute("INSERT INTO devices (token, sub_id, created, settings) VALUES(?,?,?,?)",
+                     (fresh, sub_id, datetime.now(TZ).isoformat(), None))
         conn.commit()
     return fresh
 
@@ -132,11 +251,12 @@ def get_device(token):
         return None
     conn = connect()
     row = conn.execute("""
-        SELECT devices.token, devices.sub_id, subs.endpoint, subs.p256dh, subs.auth
+        SELECT devices.token, devices.sub_id, devices.settings, subs.endpoint, subs.p256dh, subs.auth
         FROM devices LEFT JOIN subs ON subs.id = devices.sub_id WHERE devices.token=?""", (token,)).fetchone()
     if not row:
         return None
-    return {"token": row[0], "sub_id": row[1], "endpoint": row[2], "p256dh": row[3], "auth": row[4]}
+    return {"token": row[0], "sub_id": row[1], "settings": clean_settings(row[2]) if row[2] else None,
+            "endpoint": row[3], "p256dh": row[4], "auth": row[5]}
 
 
 def latest_device_park(token):
@@ -172,21 +292,48 @@ def attach_sub(park_id, sub):
 
 
 def cancel_park(park_id):
+    """End the session and drop every alert that has not been sent."""
     with LOCK:
         conn = connect()
         cur = conn.execute("UPDATE parks SET cancelled=1 WHERE id=?", (park_id,))
+        conn.execute("DELETE FROM reminders WHERE park_id=? AND sent=0", (park_id,))
         conn.commit()
         return cur.rowcount > 0
+
+
+def snooze_park(park_id, now, minutes=None):
+    """Pause the repeating deadline alert. The 15- and 5-minute warnings still fire."""
+    with LOCK:
+        conn = connect()
+        row = conn.execute(
+            "SELECT move_by, settings, cancelled FROM parks WHERE id=?", (park_id,)).fetchone()
+        if not row or row[2]:
+            return None
+        s = clean_settings(row[1])
+        try:
+            minutes = int(minutes) if minutes else s["snooze_minutes"]
+        except (TypeError, ValueError):
+            minutes = s["snooze_minutes"]
+        minutes = min(60, max(1, minutes))
+        until = now + timedelta(minutes=minutes)
+        conn.execute("UPDATE parks SET snooze_until=? WHERE id=?", (until.isoformat(), park_id))
+        conn.execute("DELETE FROM reminders WHERE park_id=? AND sent=0 AND kind='repeat'", (park_id,))
+        deadline = datetime.fromisoformat(row[0]) if row[0] else None
+        if deadline and until <= deadline + timedelta(minutes=s["repeat_for_minutes"]):
+            conn.execute("INSERT INTO reminders(park_id, fire_at, kind, sent) VALUES(?,?,?,0)",
+                         (park_id, until.isoformat(), "repeat"))
+        conn.commit()
+    return {"snooze_until": until.isoformat(), "minutes": minutes}
 
 
 def get_park(park_id):
     conn = connect()
     row = conn.execute(
-        "SELECT id, lat, lng, address, move_by, reason, headline, cancelled, created FROM parks WHERE id=?",
+        "SELECT id, lat, lng, address, move_by, reason, headline, cancelled, created, settings, snooze_until FROM parks WHERE id=?",
         (park_id,)).fetchone()
     if not row:
         return None
-    keys = ("id", "lat", "lng", "address", "move_by", "reason", "headline", "cancelled", "created")
+    keys = ("id", "lat", "lng", "address", "move_by", "reason", "headline", "cancelled", "created", "settings", "snooze_until")
     return dict(zip(keys, row))
 
 
@@ -198,8 +345,9 @@ def _ics_stamp(dt):
     return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
-def build_ics(uid, start, summary, description):
-    """One event at the deadline with alarms 15 min before, 5 min before, and at the time."""
+def build_ics(uid, start, summary, description, leads=None):
+    """One event at the deadline with an alarm for each lead time and one at the deadline."""
+    leads = clean_settings({"lead_minutes": leads} if leads else None)["lead_minutes"]
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -214,7 +362,9 @@ def build_ics(uid, start, summary, description):
         "SUMMARY:" + _ics_escape(summary),
         "DESCRIPTION:" + _ics_escape(description),
     ]
-    for trigger, text in (("-PT15M", "Move your car in 15 minutes"), ("-PT5M", "Move your car in 5 minutes"), ("PT0S", "Move your car now")):
+    alarms = [(f"-PT{m}M", f"Move your car in {m} minutes") for m in leads]
+    alarms.append(("PT0S", "Move your car now"))
+    for trigger, text in alarms:
         lines += ["BEGIN:VALARM", "ACTION:DISPLAY", f"TRIGGER:{trigger}", "DESCRIPTION:" + _ics_escape(text), "END:VALARM"]
     lines += ["END:VEVENT", "END:VCALENDAR"]
     return "\r\n".join(lines) + "\r\n"
@@ -224,20 +374,44 @@ def push_configured():
     return bool(os.environ.get("VAPID_PUBLIC_KEY") and os.environ.get("VAPID_PRIVATE_KEY"))
 
 
-def _title(kind):
-    return {"15": "Move your car in 15 minutes", "5": "Move your car in 5 minutes"}.get(kind, "Move your car now")
+def alert_content(kind, address, reason, pid):
+    """Copy and urgency for one push. iOS cannot set a custom sound; high urgency is the strongest Web Push option."""
+    place = address or "your spot"
+    why = reason or "Time to move the car."
+    urgent = kind in ("now", "repeat")
+    if kind == "night":
+        title, body = "Tomorrow: move the car", f"{why} {place}."
+    elif kind == "morning":
+        title, body = "This morning: move the car", f"Move it before the restriction starts. {why} {place}."
+    elif kind == "repeat":
+        title, body = "Still there — move the car", f"You have not confirmed the car was moved. {place}. {why}"
+    elif kind == "now":
+        title, body = "Move your car now", f"The deadline is here. {place}. {why}"
+    elif str(kind).isdigit():
+        title, body = f"Move your car in {kind} minutes", f"{place}. {why}"
+    else:
+        title, body = "Move your car", f"{place}. {why}"
+    # A new tag on each urgent alert so iOS plays a sound instead of silently replacing the last one.
+    tag = f"park-{pid}-{kind}-{int(time.time())}" if urgent else f"park-{pid}-{kind}"
+    return {
+        "title": title, "body": body, "tag": tag, "url": "/?park=" + pid,
+        "level": "final" if urgent else "soon", "requireInteraction": urgent, "urgent": urgent,
+        "renotify": True, "vibrate": [500, 200, 500, 200, 700] if urgent else [200, 100, 200],
+    }
 
 
 def send_web_push(sub, payload):
     from pywebpush import webpush, WebPushException
     pem = os.environ["VAPID_PRIVATE_KEY"].replace("\\n", "\n")
+    headers = {"Urgency": "high"} if payload.get("urgent") else {"Urgency": "normal"}
     try:
         webpush(
             subscription_info={"endpoint": sub["endpoint"], "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]}},
             data=json.dumps(payload),
             vapid_private_key=pem,
             vapid_claims={"sub": os.environ.get("VAPID_SUBJECT") or "mailto:la-parking@example.com"},
-            ttl=3600,
+            ttl=600 if payload.get("urgent") else 3600,
+            headers=headers,
         )
         return True
     except WebPushException as e:
@@ -249,7 +423,8 @@ def send_web_push(sub, payload):
 
 
 def send_due(now, sender=None):
-    """Send reminders whose time has come. A reminder more than 10 minutes late is dropped."""
+    """Send reminders whose time has come. A lead that is more than 10 minutes late is dropped.
+    Night-before and morning alerts are still sent if the deadline has not passed."""
     sender = sender or send_web_push
     if sender is send_web_push and not push_configured():
         return 0
@@ -257,25 +432,29 @@ def send_due(now, sender=None):
         conn = connect()
         rows = conn.execute("""
             SELECT reminders.id, reminders.kind, reminders.fire_at, parks.id, parks.address, parks.reason,
-                   parks.sub_id, subs.endpoint, subs.p256dh, subs.auth
+                   parks.sub_id, parks.move_by, parks.settings, parks.snooze_until,
+                   subs.endpoint, subs.p256dh, subs.auth
             FROM reminders
             JOIN parks ON parks.id = reminders.park_id
             LEFT JOIN subs ON subs.id = parks.sub_id
             WHERE reminders.sent=0 AND parks.cancelled=0 AND reminders.fire_at<=?
         """, (now.isoformat(),)).fetchall()
     sent = 0
-    for rid, kind, fire_at, pid, address, reason, sub_id, endpoint, p256dh, auth in rows:
+    for rid, kind, fire_at, pid, address, reason, sub_id, move_by, settings, snooze_until, endpoint, p256dh, auth in rows:
         fire = datetime.fromisoformat(fire_at)
-        if now - fire > timedelta(minutes=10):
+        deadline = datetime.fromisoformat(move_by) if move_by else None
+        grace = timedelta(hours=6) if kind in ("night", "morning") else timedelta(minutes=10)
+        if now - fire > grace or (kind in ("night", "morning") and deadline and now >= deadline):
             with LOCK:
                 c = connect()
                 c.execute("UPDATE reminders SET sent=1 WHERE id=?", (rid,))
                 c.commit()
             continue
+        if kind == "repeat" and snooze_until and datetime.fromisoformat(snooze_until) > now:
+            continue
         if not endpoint:
-            continue   # a subscription may arrive before the 10-minute grace ends
-        payload = {"title": _title(kind), "body": " ".join(x for x in (address, reason) if x) or "Time to move the car.",
-                   "tag": f"park-{pid}-{kind}", "url": "/?park=" + pid}
+            continue
+        payload = alert_content(kind, address, reason, pid)
         result = sender({"endpoint": endpoint, "p256dh": p256dh, "auth": auth}, payload)
         if result:
             with LOCK:
@@ -283,6 +462,12 @@ def send_due(now, sender=None):
                 c.execute("UPDATE reminders SET sent=1 WHERE id=?", (rid,))
                 if result == "gone" and sub_id:
                     c.execute("DELETE FROM subs WHERE id=?", (sub_id,))
+                if kind in ("now", "repeat") and result is True:
+                    nxt = next_repeat(deadline, now if now > fire else fire, settings)
+                    snoozed = snooze_until and datetime.fromisoformat(snooze_until) > now
+                    if nxt and not snoozed:
+                        c.execute("INSERT INTO reminders(park_id, fire_at, kind, sent) VALUES(?,?,?,0)",
+                                  (pid, nxt.isoformat(), "repeat"))
                 c.commit()
             if result is True:
                 sent += 1

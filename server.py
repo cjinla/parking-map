@@ -252,11 +252,11 @@ def _alarm_at(result, now):
         return datetime.fromisoformat(result["move_by"])
     return None
 
-def park(lat, lng, now, sign=None, has_permit=False, radius=40, sub_id=None, searched=None, device_token=None):
+def park(lat, lng, now, sign=None, has_permit=False, radius=40, sub_id=None, searched=None, device_token=None, settings=None):
     result = assemble(lat, lng, now, sign, has_permit, radius, searched)
     when = _alarm_at(result, now)
     saved = alarms.save_park(lat, lng, result.get("address") or result.get("segment"), when,
-                             result.get("reason"), result.get("headline"), sub_id, now, device_token)
+                             result.get("reason"), result.get("headline"), sub_id, now, device_token, settings)
     result.update(saved)
     result["alarm_at"] = saved["alarm_at"]
     return result
@@ -288,7 +288,7 @@ def autopark(lat, lng, token, now, sender=None):
                     "address": prev.get("address"), "reason": prev.get("reason"), "headline": prev.get("headline"),
                     "lat": prev["lat"], "lng": prev["lng"], "reminders": [],
                     "message": parked_message(prev.get("address"), when, now), "push_sent": False}
-    result = park(lat, lng, now, sub_id=device.get("sub_id"), device_token=token)
+    result = park(lat, lng, now, sub_id=device.get("sub_id"), device_token=token, settings=device.get("settings"))
     when = datetime.fromisoformat(result["alarm_at"]) if result.get("alarm_at") else None
     place = result.get("address") or result.get("segment")
     message = parked_message(place, when, now)
@@ -382,6 +382,13 @@ class H(BaseHTTPRequestHandler):
         if cancel:
             ok = alarms.cancel_park(cancel.group(1))
             return self.reply(200, {"cancelled": ok})
+        snooze = re.fullmatch(r"/park/([a-f0-9]{32})/snooze", path)
+        if snooze:
+            try:
+                result = alarms.snooze_park(snooze.group(1), self.when(body.get("at")), body.get("minutes"))
+            except ValueError as e:
+                return self.reply(400, {"error": str(e)})
+            return self.reply(200, result) if result else self.reply(404, {"error": "That parked session is gone."})
         self.reply(404, {"error": "unknown request"})
 
     def locate(self, q):
@@ -429,7 +436,7 @@ class H(BaseHTTPRequestHandler):
             if body.get("subscription"):
                 sub_id = alarms.upsert_sub(body["subscription"])
             out = park(lat, lng, now, sign=body.get("sign"), has_permit=bool(body.get("has_permit")),
-                       radius=radius, sub_id=sub_id, searched=searched)
+                       radius=radius, sub_id=sub_id, searched=searched, settings=body.get("settings"))
         except LookupError as e:
             return self.reply(200, {"status": "unknown", "headline": str(e)})
         except ValueError as e:
@@ -455,7 +462,7 @@ class H(BaseHTTPRequestHandler):
             if body.get("rotate"):
                 token = alarms.rotate_device(str(body.get("token") or ""), sub)
             else:
-                token = alarms.ensure_device(str(body.get("token") or "") or None, sub)
+                token = alarms.ensure_device(str(body.get("token") or "") or None, sub, body.get("settings"))
         except ValueError as e:
             return self.reply(400, {"error": str(e)})
         base = self.public_base()
@@ -482,7 +489,8 @@ class H(BaseHTTPRequestHandler):
         start = datetime.fromisoformat(row["move_by"])
         why = row.get("reason") or "Move the car"
         where = row.get("address") or "your parking spot"
-        body = alarms.build_ics(park_id, start, "Move your car — " + where, why + ". Posted signs override this reminder.")
+        leads = alarms.clean_settings(row.get("settings"))["lead_minutes"] if row.get("settings") else None
+        body = alarms.build_ics(park_id, start, "Move your car — " + where, why + ". Posted signs override this reminder.", leads)
         data = body.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/calendar; charset=utf-8")

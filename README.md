@@ -118,7 +118,11 @@ These are placeholders. The screen says they are missing and the sign form is ho
 
 ## Alarms
 
-Reminders are 15 minutes before, 5 minutes before, and at the deadline.
+Reminders default to 15 minutes before, 5 minutes before, and an urgent alert at the deadline. **Alert times** on the phone changes those lead times. The deadline push uses Web Push urgency `high`, `requireInteraction` where the browser supports it (iOS ignores that flag), a distinct “Move your car now” title, and a new notification tag so the phone sounds again. While the page is open, that alert plays a louder beep and a long vibration. iOS does not let a website choose the lock-screen sound.
+
+If you do not tap **I moved it** or **Snooze**, the urgent alert repeats every 3 minutes until 15 minutes after the deadline. Ending the session deletes every alert that has not been sent.
+
+Street sweeping and tow-away or rush-hour deadlines also get an alert at 8 PM the night before, and a 7 AM alert when the restriction starts before 10 AM.
 
 - **In the open app:** a countdown, a beep, and vibration where the phone allows it (iPhone Safari does not vibrate).
 - **Web Push:** service worker `sw.js`, manifest, and a scheduler thread inside `server.py`. Works for a home-screen app on iOS 16.4+. The server sends the push; the phone must already have allowed notifications.

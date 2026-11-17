@@ -249,7 +249,58 @@ empty_token = alarms.ensure_device()
 code, nowhere = server.api_autopark(
     {"token": empty_token, "lat": 0, "lng": 0}, "", at("2026-10-23T14:00"), grab)
 assert code == 200 and "No move-by time" in nowhere["message"]
+# Escalating alerts: leads, night-before and morning for sweeping/tow, repeats, snooze, cancel.
+sweep_deadline = at("2026-10-21T08:00")  # Wednesday 8 AM
+planned = alarms.plan_alerts(sweep_deadline, at("2026-10-20T15:00"), "Street sweeping starts")
+kinds = [a["kind"] for a in planned]
+assert kinds == ["night", "morning", "15", "5", "now"], kinds
+assert next(a["at"] for a in planned if a["kind"] == "night") == at("2026-10-20T20:00")
+assert next(a["at"] for a in planned if a["kind"] == "morning") == at("2026-10-21T07:00")
+afternoon = alarms.plan_alerts(at("2026-10-21T14:00"), at("2026-10-20T12:00"), "Tow-away / no stopping starts")
+assert "night" in [a["kind"] for a in afternoon] and "morning" not in [a["kind"] for a in afternoon]
+late = alarms.plan_alerts(sweep_deadline, at("2026-10-20T21:00"), "Street sweeping starts")
+assert "night" not in [a["kind"] for a in late] and "morning" in [a["kind"] for a in late]
+early = alarms.plan_alerts(at("2026-10-21T06:30"), at("2026-10-20T18:00"), "Rush-hour tow-away starts")
+assert next(a["at"] for a in early if a["kind"] == "morning") == at("2026-10-21T05:30")
+custom = alarms.plan_alerts(at("2026-10-23T16:00"), at("2026-10-23T14:00"), "2-hour meter ends", {"lead_minutes": [30, 10]})
+assert [a["minutes_before"] for a in custom if a["minutes_before"] is not None] == [30, 10, 0]
+meter_only = alarms.plan_alerts(at("2026-10-23T16:00"), at("2026-10-23T14:00"), "2-hour meter ends")
+assert [a["kind"] for a in meter_only] == ["15", "5", "now"]
+final = alarms.alert_content("now", "HOLLYWOOD BLVD", "Street sweeping starts", "abc")
+assert final["title"] == "Move your car now" and final["requireInteraction"] is True and final["urgent"] is True and final["level"] == "final"
+lead = alarms.alert_content("15", "HOLLYWOOD BLVD", "2-hour meter ends", "abc")
+assert lead["title"] == "Move your car in 15 minutes" and lead["urgent"] is False
+repeat = alarms.alert_content("repeat", "HOLLYWOOD BLVD", "Street sweeping starts", "abc")
+assert repeat["title"] == "Still there — move the car" and repeat["requireInteraction"] is True
+assert alarms.next_repeat(at("2026-10-23T16:00"), at("2026-10-23T16:00")) == at("2026-10-23T16:03")
+assert alarms.next_repeat(at("2026-10-23T16:00"), at("2026-10-23T16:16")) is None
+alarms.SESSION_DB = "test-alerts.db"
+sid = alarms.upsert_sub({"endpoint": "https://push.example/nag", "keys": {"p256dh": "k", "auth": "a"}})
+nag_park = alarms.save_park(34.1, -118.3, "HOLLYWOOD BLVD", at("2026-10-23T16:00"), "Street sweeping starts", "move", sid, at("2026-10-23T15:56"))
+assert "night" not in [r["kind"] for r in nag_park["reminders"]]  # same afternoon
+nag_msgs = []
+def grab_nag(sub, payload):
+    nag_msgs.append(payload)
+    return True
+assert alarms.send_due(at("2026-10-23T16:00:01"), grab_nag) == 1
+assert nag_msgs[-1]["urgent"] is True and nag_msgs[-1]["requireInteraction"] is True
+conn = sqlite3.connect(alarms.SESSION_DB)
+queued = conn.execute("SELECT fire_at, kind FROM reminders WHERE park_id=? AND sent=0", (nag_park["id"],)).fetchall()
+conn.close()
+assert len(queued) == 1 and queued[0][1] == "repeat" and queued[0][0].startswith("2026-10-23T16:03"), queued
+snoozed = alarms.snooze_park(nag_park["id"], at("2026-10-23T16:01"))
+assert snoozed["snooze_until"].startswith("2026-10-23T16:11")
+conn = sqlite3.connect(alarms.SESSION_DB)
+left = conn.execute("SELECT fire_at FROM reminders WHERE park_id=? AND sent=0 AND kind='repeat'", (nag_park["id"],)).fetchall()
+conn.close()
+assert [row[0] for row in left] == [snoozed["snooze_until"]]
+assert alarms.cancel_park(nag_park["id"]) is True
+conn = sqlite3.connect(alarms.SESSION_DB)
+assert conn.execute("SELECT COUNT(*) FROM reminders WHERE park_id=? AND sent=0", (nag_park["id"],)).fetchone()[0] == 0
+conn.close()
+assert alarms.send_due(at("2026-10-23T16:11"), grab_nag) == 0
 os.remove("test.db")
-for name in ("test-sessions.db", "test-sessions.db-wal", "test-sessions.db-shm"):
+for name in ("test-sessions.db", "test-sessions.db-wal", "test-sessions.db-shm",
+             "test-alerts.db", "test-alerts.db-wal", "test-alerts.db-shm"):
     if os.path.exists(name): os.remove(name)
 print("all tests passed")

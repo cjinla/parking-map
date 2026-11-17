@@ -101,6 +101,7 @@ input,select{width:100%;font:inherit;color:var(--ink);background:var(--card);bor
 <p class="hint">The beep works only while this page is open and the screen is on. A locked iPhone needs the calendar alarm or a notification.</p>
 </details>
 <button id="autosetup" class="alt" type="button">Set up auto-park</button>
+<button id="alertsettings" class="alt" type="button">Alert times</button>
 <div id="out" aria-live="polite"></div>
 </main>
 <script>
@@ -130,20 +131,42 @@ function unlock(){
     if (audioCtx.state === "suspended") audioCtx.resume();
   } catch (e) {}
 }
-function beep(){
+var ALERT_DEFAULTS = {lead1:15, lead2:5, repeat:3, repeatFor:15, nightHour:20, morningHour:7, earlyBefore:10, snooze:10};
+var lastBeep = 0;
+function loadSettings(){
+  var o = {}, saved = {};
+  try { saved = JSON.parse(localStorage.getItem("la-alert-settings") || "{}") || {}; } catch (e) {}
+  for (var k in ALERT_DEFAULTS) o[k] = saved[k] != null ? saved[k] : ALERT_DEFAULTS[k];
+  if (!(o.lead2 < o.lead1)) o.lead2 = Math.min(o.lead2, Math.max(1, o.lead1 - 1));
+  return o;
+}
+function settingsPayload(s){
+  return {lead_minutes:[+s.lead1, +s.lead2], repeat_minutes:+s.repeat, repeat_for_minutes:+s.repeatFor,
+    night_hour:+s.nightHour, morning_hour:+s.morningHour, early_before_hour:+s.earlyBefore, snooze_minutes:+s.snooze};
+}
+function beep(urgent){
+  if (Date.now() - lastBeep < 4000) return;
+  lastBeep = Date.now();
   unlock();
   if (!audioCtx) return;
-  function tone(freq, at, dur){
+  function tone(freq, at, dur, gain){
     var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = urgent ? "sawtooth" : "sine";
     o.frequency.value = freq; o.connect(g); g.connect(audioCtx.destination);
     var t = audioCtx.currentTime + at;
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.35, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.02);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.start(t); o.stop(t + dur);
+    o.start(t); o.stop(t + dur + 0.02);
   }
-  tone(880, 0, 0.22); tone(880, 0.32, 0.22); tone(988, 0.64, 0.4);
-  if (navigator.vibrate) navigator.vibrate([180, 80, 180, 80, 360]);
+  if (urgent) {
+    tone(520, 0, 0.28, 0.55); tone(780, 0.3, 0.28, 0.55); tone(520, 0.6, 0.28, 0.55);
+    tone(980, 0.95, 0.45, 0.6);
+    if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 700]);
+  } else {
+    tone(880, 0, 0.22, 0.3); tone(880, 0.32, 0.22, 0.3); tone(988, 0.64, 0.4, 0.35);
+    if (navigator.vibrate) navigator.vibrate([180, 80, 180, 80, 360]);
+  }
 }
 function clearTimers(){timers.forEach(clearTimeout); timers = []; if (nag){clearInterval(nag); nag = null}}
 function checkedDays(name){
@@ -295,11 +318,12 @@ function savePark(){
   var sub = null;
   try { sub = JSON.parse(localStorage.getItem("la-park-sub") || "null"); } catch (e) {}
   if (sub) body.subscription = sub;
+  body.settings = settingsPayload(loadSettings());
   fetch("/park", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)})
     .then(function(r){if(!r.ok) throw 0; return r.json()})
     .then(function(d){
       var saved = {id:d.id, alarm_at:d.alarm_at, reason:d.reason, headline:d.headline, address:d.address || d.segment,
-        lat:body.lat, lng:body.lng, sign:body.sign, has_permit:body.has_permit};
+        lat:body.lat, lng:body.lng, sign:body.sign, has_permit:body.has_permit, reminders:d.reminders || []};
       localStorage.setItem(KEY, JSON.stringify(saved));
       showParked(saved);
     })
@@ -316,27 +340,32 @@ function showParked(saved){
   }
   if (when) {
     h += '<a class="btn" id="ics" href="/park/'+esc(saved.id)+'.ics">Add to Calendar</a>';
-    h += '<p class="hint">Calendar alarms: 15 minutes before, 5 minutes before, and at the deadline. This still rings if the server is asleep.</p>';
+    var prefs = loadSettings();
+    h += '<p class="hint">Calendar alarms: '+esc(prefs.lead1)+' minutes before, '+esc(prefs.lead2)+' minutes before, and at the deadline. This still rings if the server is asleep.</p>';
   }
   h += '<button id="push" class="alt" type="button">Allow iPhone alerts</button>';
   h += '<p id="pushmsg" class="hint"></p>';
   h += '<button id="silence" class="alt" type="button" hidden>Silence the beep</button>';
-  h += '<button id="moved" class="alt" type="button">I moved the car</button>';
+  h += '<button id="snooze" class="alt" type="button">Snooze</button>';
+  h += '<button id="moved" class="alt" type="button">I moved it</button>';
   h += '<div id="banner"></div></section>';
   out.innerHTML = h;
   var ics = document.getElementById("ics");
   if (ics) ics.addEventListener("click", unlock);
   document.getElementById("push").addEventListener("click", enablePush);
   document.getElementById("moved").addEventListener("click", moved);
+  document.getElementById("snooze").addEventListener("click", function(){snooze(saved)});
   document.getElementById("silence").addEventListener("click", function(){clearTimers(); this.hidden = true});
   if (!when) return;
-  function fire(mins){
+  function fire(kind, level){
+    var urgent = level === "final" || kind === "now" || kind === "repeat";
     var banner = document.getElementById("banner");
-    var text = mins === 0 ? "Move the car now." : "Move the car in "+mins+" minutes.";
+    var text = urgent ? "Move the car now." : (kind === "night" ? "Move the car tomorrow." : kind === "morning" ? "Move the car this morning." : "Move the car in "+kind+" minutes.");
     if (banner) banner.innerHTML = '<div class="alarm" role="alert"><strong>'+esc(text)+'</strong><p>'+esc(saved.reason || "")+'</p></div>';
-    document.getElementById("silence").hidden = false;
-    beep();
-    if (mins === 0 && !nag) nag = setInterval(beep, 20000);
+    var silence = document.getElementById("silence");
+    if (silence) silence.hidden = false;
+    beep(urgent);
+    if (urgent) startNag(saved);
   }
   function tick(){
     var el = document.getElementById("count");
@@ -350,12 +379,43 @@ function showParked(saved){
   }
   tick();
   timers.push(setInterval(tick, 1000));
-  [15, 5, 0].forEach(function(mins){
-    var delay = when.getTime() - mins * 60000 - Date.now();
+  var planned = saved.reminders && saved.reminders.length ? saved.reminders : [
+    {at: new Date(when.getTime() - loadSettings().lead1 * 60000).toISOString(), kind: String(loadSettings().lead1), level: "soon"},
+    {at: new Date(when.getTime() - loadSettings().lead2 * 60000).toISOString(), kind: String(loadSettings().lead2), level: "soon"},
+    {at: when.toISOString(), kind: "now", level: "final"}
+  ];
+  planned.forEach(function(r){
+    var delay = new Date(r.at).getTime() - Date.now();
     if (delay < -20000) return;
     if (delay < 0) delay = 0;
-    timers.push(setTimeout(function(){fire(mins)}, delay));
+    timers.push(setTimeout(function(){fire(r.kind, r.level)}, delay));
   });
+}
+function startNag(saved){
+  if (nag || !saved.alarm_at) return;
+  var prefs = loadSettings();
+  var until = new Date(saved.alarm_at).getTime() + prefs.repeatFor * 60000;
+  nag = setInterval(function(){
+    if (Date.now() > until) { clearInterval(nag); nag = null; return; }
+    beep(true);
+    var banner = document.getElementById("banner");
+    if (banner) banner.innerHTML = '<div class="alarm" role="alert"><strong>Still there — move the car.</strong><p>'+esc(saved.reason || "")+'</p></div>';
+  }, Math.max(1, prefs.repeat) * 60000);
+}
+function snooze(saved){
+  if (nag) { clearInterval(nag); nag = null; }
+  var prefs = loadSettings();
+  fetch("/park/"+saved.id+"/snooze", {method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({minutes: prefs.snooze})})
+    .then(function(r){return r.json()}).then(function(d){
+      var banner = document.getElementById("banner");
+      if (banner) banner.innerHTML = '<div class="box">Snoozed for '+esc(prefs.snooze)+' minutes.</div>';
+      if (d && d.snooze_until) {
+        var delay = new Date(d.snooze_until).getTime() - Date.now();
+        if (delay < 0) delay = 0;
+        timers.push(setTimeout(function(){ beep(true); startNag(saved); }, delay));
+      }
+    }).catch(function(){});
 }
 function moved(){
   clearTimers();
@@ -530,7 +590,7 @@ function maybeAutopark(){
       body:JSON.stringify({token: token, lat: p.coords.latitude, lng: p.coords.longitude})})
       .then(function(r){if(!r.ok) throw 0; return r.json()})
       .then(function(d){
-        var saved = {id:d.id, alarm_at:d.alarm_at, reason:d.reason, headline:d.headline || d.message, address:d.address, lat:d.lat, lng:d.lng};
+        var saved = {id:d.id, alarm_at:d.alarm_at, reason:d.reason, headline:d.headline || d.message, address:d.address, lat:d.lat, lng:d.lng, reminders:d.reminders || []};
         localStorage.setItem(KEY, JSON.stringify(saved));
         showParked(saved);
         var banner = document.getElementById("banner");
@@ -544,7 +604,41 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
 go.addEventListener("click", checkGps);
 document.getElementById("addrgo").addEventListener("click", byAddress);
 document.getElementById("addr").addEventListener("keydown", function(e){if(e.key==="Enter") byAddress()});
+function showAlertSettings(){
+  var s = loadSettings();
+  function opts(values, current){
+    return values.map(function(n){return '<option value="'+n+'"'+(String(n)===String(current)?" selected":"")+'>'+n+'</option>'}).join("");
+  }
+  var h = '<section class="box"><p class="eyebrow">Alerts</p><h2>When to warn you</h2>';
+  h += '<p>These times apply to a spot you save here and to auto-park. Sweeping and tow-away also get a night-before alert and a morning alert when the restriction starts early.</p>';
+  h += '<label for="lead1">First warning, minutes before</label><select id="lead1">'+opts([60,45,30,20,15,10], s.lead1)+'</select>';
+  h += '<label for="lead2">Second warning, minutes before</label><select id="lead2">'+opts([30,15,10,5,2,1], s.lead2)+'</select>';
+  h += '<label for="repeat">Repeat the deadline alert every</label><select id="repeat">'+opts([2,3,5,10], s.repeat)+'</select><p class="hint">Minutes. Repeats until you tap I moved it or Snooze, and stops '+esc(s.repeatFor)+' minutes after the deadline.</p>';
+  h += '<label for="repeatFor">Keep repeating after the deadline</label><select id="repeatFor">'+opts([5,15,30,60], s.repeatFor)+'</select><p class="hint">Minutes. Then the repeats stop even if you have not answered.</p>';
+  h += '<label for="nightHour">Night before sweeping or tow-away</label><select id="nightHour">'+opts([18,19,20,21], s.nightHour)+'</select><p class="hint">Hour, 24-hour clock. 20 is 8 PM.</p>';
+  h += '<label for="morningHour">Morning alert if it starts before 10 AM</label><select id="morningHour">'+opts([6,7,8], s.morningHour)+'</select>';
+  h += '<p class="hint">iPhone lock-screen alerts use the system sound. At the deadline the push is marked high priority and asks to stay on screen where the phone allows it. A louder beep plays while this page is open. iOS does not let a website choose the notification sound.</p>';
+  h += '<button id="savesettings" type="button">Save alert times</button></section>';
+  out.innerHTML = h;
+  document.getElementById("savesettings").addEventListener("click", function(){
+    var next = {lead1:+document.getElementById("lead1").value, lead2:+document.getElementById("lead2").value,
+      repeat:+document.getElementById("repeat").value, repeatFor:+document.getElementById("repeatFor").value,
+      nightHour:+document.getElementById("nightHour").value, morningHour:+document.getElementById("morningHour").value,
+      earlyBefore:10, snooze:10};
+    localStorage.setItem("la-alert-settings", JSON.stringify(next));
+    var token = localStorage.getItem("la-device-token");
+    var done = function(){say("Alert times saved. The next spot you park uses them.")};
+    if (!token) { done(); return; }
+    fetch("/api/device", {method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token: token, settings: settingsPayload(next)})}).then(done).catch(done);
+  });
+}
 document.getElementById("autosetup").addEventListener("click", showAutoSetup);
+document.getElementById("alertsettings").addEventListener("click", showAlertSettings);
+if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", function(e){
+  if (!e.data || e.data.type !== "alarm") return;
+  beep(e.data.level === "final");
+});
 restore();
 maybeAutopark();
 </script>
