@@ -9,6 +9,7 @@ server.DB = "test.db"
 from rules import (Rule, move_by, answer, windows, apply_sign, rules_from_sign, holiday_name,
                    sweeping_holiday_name, parse_days)
 import alarms
+import citylinks
 import signparse
 import signread
 import vapid_keys
@@ -348,10 +349,70 @@ tiny = base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
 saved_scan = signread.read_sign(signread.decode_images(["data:image/png;base64," + tiny]), [])
 assert saved_scan["available"] is False and saved_scan["scan_id"] and "Type what the sign says" in saved_scan["message"]
 assert signread.attach_scan(saved_scan["scan_id"], "park123") == 1
+# Holiday calendar, saved permits, paid-until, nearby legal spots, crowd reports.
+from rules import holiday_calendar, permit_covers
+cal = {h["date"]: h for h in holiday_calendar(2026)}
+assert cal["2026-01-01"]["meters_off"] and cal["2026-01-01"]["sweeping_off"]
+assert cal["2026-07-03"]["meters_off"] and cal["2026-07-04"]["meters_off"]
+assert cal["2026-03-31"]["sweeping_off"] and cal["2026-03-31"]["meters_off"] is False
+assert cal["2026-11-26"]["meters_off"] and cal["2026-11-27"]["sweeping_off"] and cal["2026-11-27"]["meters_off"] is False
+assert permit_covers("Preferential Parking District PPD 118", ["118"])
+assert permit_covers("PPD 119", ["118"]) is False
+assert citylinks.text_pay_url("17-126") == "sms:77447&body=17126"
+assert citylinks.text_pay_url("") is None
+assert any("pay-a-citation" in item["url"] for item in citylinks.help_links())
+assert any("booted-towed" in item["url"] for item in citylinks.help_links())
+
+near = sqlite3.connect("nearby.db")
+near.execute("CREATE TABLE meters(id,lat,lng,address,rules)")
+near.execute("INSERT INTO meters VALUES('here',34.10,-118.30,'HERE ST',?)",
+             (json.dumps([{"kind":"no","days":list(range(7)),"start":0,"end":1440,"label":"Red curb","source":"t"}]),))
+near.execute("INSERT INTO meters VALUES('there',34.1002,-118.30,'THERE ST',?)",
+             (json.dumps([{"kind":"limit","days":list(range(7)),"start":480,"end":1080,"label":"2-hour meter","limit_min":120,"source":"t","hours_known":True}]),))
+near.commit()
+near.close()
+server.DB = "nearby.db"
+spots = server.legal_nearby(34.10, -118.30, at("2026-10-23T10:00"))
+assert len(spots) == 1 and spots[0]["address"] == "THERE ST" and spots[0]["stay_minutes"] == 120, spots
+
+alarms.SESSION_DB = "test-reports.db"
+if os.path.exists("test-reports.db"): os.remove("test-reports.db")
+token = alarms.ensure_device()
+rep = alarms.create_report(token, 34.10, -118.30, "temp_no_parking", "Film crew", at("2026-10-23T10:00"))
+blocked = server.assemble(34.10, -118.30, at("2026-10-23T10:30"))
+assert blocked["status"] == "no" and blocked["can_park"] is False and "Temporary no-parking" in blocked["reason"]
+again = alarms.confirm_report(token, rep["id"], at("2026-10-23T10:31"))
+assert again["already"] is True and again["confirms"] == 1
+other = alarms.ensure_device()
+confirmed = alarms.confirm_report(other, rep["id"], at("2026-10-23T10:32"))
+assert confirmed["confirms"] == 2 and confirmed["already"] is False
+for n in range(4):
+    alarms.create_report(token, 34.11, -118.31, "broken_meter", str(n), at("2026-10-23T10:40"))
+try:
+    alarms.create_report(token, 34.11, -118.31, "enforcement", "sixth", at("2026-10-23T10:50"))
+    raise SystemExit("abuse limit did not fire")
+except ValueError:
+    pass
+spots = server.legal_nearby(34.10, -118.30, at("2026-10-23T10:30"))
+assert spots == []
+
+paid_park = alarms.save_park(34.1, -118.3, "THERE ST", at("2026-10-23T12:00"), "2-hour meter", "Move by noon",
+                             None, at("2026-10-23T10:00"), token)
+moved = alarms.reschedule_paid(paid_park["id"], at("2026-10-23T14:00"), at("2026-10-23T10:05"))
+assert moved["ok"] and moved["alarm_at"].startswith("2026-10-23T14:00")
+assert [r["kind"] for r in moved["reminders"]] == ["15", "5", "now"]
+sweep_park = alarms.save_park(34.1, -118.3, "THERE ST", at("2026-10-23T12:00"), "Street sweeping", "Sweeping",
+                              None, at("2026-10-23T10:00"), token)
+kept = alarms.reschedule_paid(sweep_park["id"], at("2026-10-23T15:00"), at("2026-10-23T10:05"))
+assert kept["ok"] is False and kept["alarm_at"].startswith("2026-10-23T12:00")
+text = server.evidence_text(paid_park["id"])
+assert "THERE ST" in text and "Rules and warnings shown" in text
+
 import shutil
 shutil.rmtree(signread.PHOTO_DIR, ignore_errors=True)
 os.remove("test.db")
 for name in ("test-sessions.db", "test-sessions.db-wal", "test-sessions.db-shm",
-             "test-alerts.db", "test-alerts.db-wal", "test-alerts.db-shm"):
+             "test-alerts.db", "test-alerts.db-wal", "test-alerts.db-shm",
+             "test-reports.db", "test-reports.db-wal", "test-reports.db-shm", "nearby.db"):
     if os.path.exists(name): os.remove(name)
 print("all tests passed")

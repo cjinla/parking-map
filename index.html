@@ -73,6 +73,12 @@ input,select{width:100%;font:inherit;color:var(--ink);background:var(--card);bor
 .alarm button{background:#fff;color:var(--no);margin-top:8px}
 .small{color:var(--mute);font-size:.85rem;margin-top:16px}
 .filecam{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
+.map{position:relative;height:160px;margin-top:10px;background:var(--card);border:1px solid var(--line);border-radius:12px}
+.map i,.map b{position:absolute;width:12px;height:12px;border-radius:50%;transform:translate(-50%,-50%)}
+.map i{background:var(--yes)}.map b{background:var(--permit);width:14px;height:14px}
+.spots{list-style:none;padding:0;margin:8px 0 0}
+.spots li{padding:8px 0;border-top:1px solid var(--line)}
+.spots a{font-weight:700}
 .code,input.code{font-family:ui-monospace,Menlo,monospace;font-size:.9rem;word-break:break-all}
 .checkline{display:flex;gap:8px;align-items:center}
 .checkline input{width:auto}
@@ -103,6 +109,9 @@ input,select{width:100%;font:inherit;color:var(--ink);background:var(--card);bor
 </details>
 <button id="autosetup" class="alt" type="button">Set up auto-park</button>
 <button id="alertsettings" class="alt" type="button">Alert times</button>
+<button id="permits" class="alt" type="button">My permit districts</button>
+<button id="holidays" class="alt" type="button">City holidays</button>
+<button id="tickethelp" class="alt" type="button">Ticket or tow</button>
 <div id="out" aria-live="polite"></div>
 </main>
 <script>
@@ -242,8 +251,17 @@ function show(d, gpsNote){
     } else {
       h += '<button id="park" type="button">I parked here</button>';
     }
+    h += '<button id="nearby" class="alt" type="button">Find a legal spot nearby</button>';
+    h += '<div id="nearbybox"></div>';
   }
   if (gpsNote) h += '<div class="box warn">'+esc(gpsNote)+'</div>';
+  if (d.reports && d.reports.length) {
+    h += '<h2>Nearby reports</h2>';
+    d.reports.forEach(function(r){
+      h += '<div class="box"><b>'+esc(reportLabel(r.kind))+'</b><p>'+esc(r.note || "")+'</p><p class="hint">'+esc(r.distance_m)+' m · '+esc(r.confirms)+' confirm'+(r.confirms === 1 ? "" : "s")+' · until '+esc(r.expires)+'</p>';
+      h += '<button type="button" class="alt" data-confirm="'+esc(r.id)+'">Still true</button></div>';
+    });
+  }
   (d.warnings || []).forEach(function(w){h += '<div class="box warn">'+esc(w)+'</div>'});
   (d.gaps || []).forEach(function(g){h += '<div class="box">'+esc(g.text)+'</div>'});
   if (d.timeline && d.timeline.length){
@@ -264,6 +282,13 @@ function show(d, gpsNote){
       h += '</ul></section>';
     });
   }
+  h += '<details><summary>Report this block</summary>';
+  h += '<p class="hint">Temporary no-parking is treated as a ban until it expires. Broken meters and enforcement are shown, not used as a ban.</p>';
+  h += '<label for="reportnote">Note, optional</label><input id="reportnote" type="text" maxlength="240" placeholder="Film crew, posted until 6 PM">';
+  h += '<button id="rep-temp" class="alt" type="button">Temporary no-parking</button>';
+  h += '<button id="rep-meter" class="alt" type="button">Broken meter</button>';
+  h += '<button id="rep-tow" class="alt" type="button">Enforcement or tow truck</button>';
+  h += '<p id="reportmsg" class="hint"></p></details>';
   h += '<label class="btn" for="scanfile">Scan sign</label>';
   h += '<input id="scanfile" class="filecam" type="file" accept="image/*" capture="environment" aria-label="Photograph the parking sign">';
   h += '<p id="scanhint" class="hint"></p><div id="scanread"></div>';
@@ -280,7 +305,16 @@ function show(d, gpsNote){
   var park = document.getElementById("park");
   if (park) park.addEventListener("click", function(){savePark(false)});
   var have = document.getElementById("have");
-  if (have) have.addEventListener("click", function(){recheck(true)});
+  if (have) have.addEventListener("click", function(){savePermitName(spot.permit_district); recheck(true)});
+  var nearby = document.getElementById("nearby");
+  if (nearby) nearby.addEventListener("click", findNearby);
+  [["rep-temp","temp_no_parking"],["rep-meter","broken_meter"],["rep-tow","enforcement"]].forEach(function(pair){
+    var btn = document.getElementById(pair[0]);
+    if (btn) btn.addEventListener("click", function(){sendReport(pair[1])});
+  });
+  document.querySelectorAll("[data-confirm]").forEach(function(btn){
+    btn.addEventListener("click", function(){confirmReport(btn.getAttribute("data-confirm"), btn)});
+  });
   document.getElementById("apply").addEventListener("click", function(){recheck(false)});
   var file = document.getElementById("scanfile");
   if (file) file.addEventListener("change", function(){
@@ -402,7 +436,7 @@ function signForm(d){
 function payload(hasPermit){
   var sign = null;
   try { sign = readSign(); } catch (e) { window.alert(e.message); return null; }
-  var body = {lat: spot.lat, lng: spot.lng, sign: sign, has_permit: !!hasPermit};
+  var body = {lat: spot.lat, lng: spot.lng, sign: sign, has_permit: !!hasPermit, permits: savedPermits()};
   if (spot.searched) body.address = document.getElementById("addr").value.trim();
   return body;
 }
@@ -429,7 +463,8 @@ function savePark(){
     .then(function(r){if(!r.ok) throw 0; return r.json()})
     .then(function(d){
       var saved = {id:d.id, alarm_at:d.alarm_at, reason:d.reason, headline:d.headline, address:d.address || d.segment,
-        lat:body.lat, lng:body.lng, sign:body.sign, has_permit:body.has_permit, reminders:d.reminders || []};
+        lat:body.lat, lng:body.lng, sign:body.sign, has_permit:body.has_permit, reminders:d.reminders || [],
+        meter: !!spot.meter_used, space_id: spot.space_id || ""};
       localStorage.setItem(KEY, JSON.stringify(saved));
       showParked(saved);
     })
@@ -449,6 +484,19 @@ function showParked(saved){
     var prefs = loadSettings();
     h += '<p class="hint">Calendar alarms: '+esc(prefs.lead1)+' minutes before, '+esc(prefs.lead2)+' minutes before, and at the deadline. This still rings if the server is asleep.</p>';
   }
+  if (saved.lat != null && saved.lng != null) {
+    h += '<p>Saved pin '+esc(Number(saved.lat).toFixed(5))+', '+esc(Number(saved.lng).toFixed(5))+'</p>';
+    h += '<a class="btn" href="https://maps.apple.com/?daddr='+encodeURIComponent(saved.lat+","+saved.lng)+'&dirflg=w">Directions</a>';
+  }
+  if (saved.meter) {
+    h += '<label for="zone">Zone number on the meter sticker</label><input id="zone" inputmode="numeric" placeholder="17126">';
+    h += '<button id="payopen" type="button">Pay the meter</button><div id="paylinks"></div>';
+    h += '<label for="paiduntil">Paid until</label><input id="paiduntil" type="datetime-local">';
+    h += '<button id="paidgo" class="alt" type="button">Update the alarm</button>';
+    h += '<p class="hint">A sweeping or tow-away deadline that is sooner than the payment stays in place.</p>';
+  }
+  h += '<a class="btn alt" href="/park/'+esc(saved.id)+'/evidence">Export evidence</a>';
+  h += '<div id="helplinks"></div>';
   h += '<button id="push" class="alt" type="button">Allow iPhone alerts</button>';
   h += '<p id="pushmsg" class="hint"></p>';
   h += '<button id="silence" class="alt" type="button" hidden>Silence the beep</button>';
@@ -458,6 +506,11 @@ function showParked(saved){
   out.innerHTML = h;
   var ics = document.getElementById("ics");
   if (ics) ics.addEventListener("click", unlock);
+  var payopen = document.getElementById("payopen");
+  if (payopen) payopen.addEventListener("click", function(){openPay(saved)});
+  var paidgo = document.getElementById("paidgo");
+  if (paidgo) paidgo.addEventListener("click", function(){updatePaid(saved)});
+  loadHelp();
   document.getElementById("push").addEventListener("click", enablePush);
   document.getElementById("moved").addEventListener("click", moved);
   document.getElementById("snooze").addEventListener("click", function(){snooze(saved)});
@@ -571,7 +624,7 @@ function checkGps(){
   navigator.geolocation.getCurrentPosition(function(p){
     var note = p.coords.accuracy > 40 ? "GPS accuracy is about "+Math.round(p.coords.accuracy)+" m. Confirm you’re on the right block." : "";
     say("Checking Los Angeles rules. The first check can take a minute while the server wakes up…");
-    fetch("/check?lat="+encodeURIComponent(p.coords.latitude)+"&lng="+encodeURIComponent(p.coords.longitude))
+    fetch(withPermits("/check?lat="+encodeURIComponent(p.coords.latitude)+"&lng="+encodeURIComponent(p.coords.longitude)))
       .then(function(r){if(!r.ok) throw 0; return r.json()})
       .then(function(d){d.lat = p.coords.latitude; d.lng = p.coords.longitude; show(d, note); go.disabled = false; go.textContent = "Check this spot"})
       .catch(function(){say("Couldn’t reach the server. Try again in a moment."); go.disabled = false});
@@ -585,7 +638,7 @@ function byAddress(){
   var a = document.getElementById("addr").value.trim();
   if (!a) { say("Type an address first."); return; }
   say("Checking Los Angeles rules. The first check can take a minute while the server wakes up…");
-  fetch("/check?address="+encodeURIComponent(a)).then(function(r){if(!r.ok) throw 0; return r.json()})
+  fetch(withPermits("/check?address="+encodeURIComponent(a))).then(function(r){if(!r.ok) throw 0; return r.json()})
     .then(function(d){
       if (d.lat == null && d.status === "unknown") { say(d.headline || "Couldn’t find that address."); return; }
       show(d);
@@ -741,7 +794,139 @@ function showAlertSettings(){
       body:JSON.stringify({token: token, settings: settingsPayload(next)})}).then(done).catch(done);
   });
 }
+function savedPermits(){
+  try { var list = JSON.parse(localStorage.getItem("la-permits") || "[]"); return Array.isArray(list) ? list : []; }
+  catch (e) { return []; }
+}
+function savePermitName(name){
+  name = String(name || "").trim();
+  if (name.length < 2) return;
+  var list = savedPermits();
+  if (list.indexOf(name) < 0) list.push(name);
+  localStorage.setItem("la-permits", JSON.stringify(list));
+}
+function withPermits(url){
+  var list = savedPermits();
+  if (!list.length) return url;
+  return url + (url.indexOf("?") >= 0 ? "&" : "?") + "permits=" + encodeURIComponent(list.join("|"));
+}
+function reportLabel(kind){
+  return {temp_no_parking:"Temporary no-parking", broken_meter:"Broken meter", enforcement:"Enforcement or tow truck"}[kind] || kind;
+}
+function ensureToken(){
+  if (localStorage.getItem("la-device-token")) return Promise.resolve(localStorage.getItem("la-device-token"));
+  return fetch("/api/device", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"}).then(function(r){
+    if (!r.ok) throw 0; return r.json();
+  }).then(function(d){localStorage.setItem("la-device-token", d.token); return d.token});
+}
+function sendReport(kind){
+  var msg = document.getElementById("reportmsg");
+  if (msg) msg.textContent = "Sending…";
+  ensureToken().then(function(token){
+    var note = document.getElementById("reportnote");
+    return fetch("/api/reports", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
+      token: token, lat: spot.lat, lng: spot.lng, kind: kind, note: note ? note.value : ""
+    })});
+  }).then(function(r){return r.json().then(function(d){return {ok:r.ok, d:d}})}).then(function(res){
+    if (msg) msg.textContent = res.ok ? "Reported until " + res.d.expires + "." : (res.d.error || "Couldn’t send the report.");
+    if (res.ok) recheck(false);
+  }).catch(function(){if (msg) msg.textContent = "Couldn’t send the report."});
+}
+function confirmReport(id, button){
+  ensureToken().then(function(token){
+    return fetch("/api/reports/"+id+"/confirm", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({token: token})});
+  }).then(function(r){return r.json()}).then(function(d){
+    if (button) button.textContent = d.confirms ? "Confirmed · " + d.confirms : "Couldn’t confirm";
+  }).catch(function(){if (button) button.textContent = "Couldn’t confirm"});
+}
+function findNearby(){
+  var box = document.getElementById("nearbybox");
+  if (!box || !spot) return;
+  box.innerHTML = '<p class="hint">Looking within a few blocks…</p>';
+  fetch("/nearby?lat="+encodeURIComponent(spot.lat)+"&lng="+encodeURIComponent(spot.lng)).then(function(r){return r.json()}).then(function(d){
+    var spots = d.spots || [];
+    if (!spots.length) { box.innerHTML = '<p class="hint">No legal curb in the city data within a few blocks. Read the signs.</p>'; return; }
+    var h = '<div class="map" aria-hidden="true">';
+    spots.forEach(function(s){
+      var x = Math.max(6, Math.min(94, 50 + (s.lng - spot.lng) / 0.004 * 42));
+      var y = Math.max(8, Math.min(92, 50 - (s.lat - spot.lat) / 0.004 * 42));
+      h += '<i style="left:'+x+'%;top:'+y+'%"></i>';
+    });
+    h += '<b style="left:50%;top:50%"></b></div><ul class="spots">';
+    spots.forEach(function(s){
+      var stay = s.stay_minutes == null ? "no end time in the data" : (s.stay_minutes >= 60 ? Math.floor(s.stay_minutes/60)+" hr "+(s.stay_minutes%60)+" min" : s.stay_minutes+" min");
+      var dir = "https://maps.apple.com/?daddr="+encodeURIComponent(s.lat+","+s.lng)+"&dirflg=w";
+      h += '<li><b>'+esc(s.address || "Curb")+'</b> · '+esc(s.distance_m)+' m · stay '+esc(stay)+'<br><a href="'+dir+'">Walk there</a></li>';
+    });
+    h += '</ul>';
+    box.innerHTML = h;
+  }).catch(function(){box.innerHTML = '<p class="hint">Couldn’t look nearby. Try again.</p>'});
+}
+function openPay(saved){
+  var zone = document.getElementById("zone");
+  var q = "zone=" + encodeURIComponent(zone ? zone.value : "") + "&space=" + encodeURIComponent(saved.space_id || "");
+  fetch("/pay?"+q).then(function(r){return r.json()}).then(function(d){
+    var box = document.getElementById("paylinks");
+    if (!box) return;
+    box.innerHTML = (d.links || []).map(function(l){return '<a class="btn" href="'+esc(l.url)+'">'+esc(l.name)+'</a>'}).join("") + '<p class="hint">'+esc(d.note || "")+'</p>';
+  });
+}
+function updatePaid(saved){
+  var input = document.getElementById("paiduntil");
+  if (!input || !input.value) { window.alert("Set the time the meter is paid until."); return; }
+  fetch("/park/"+saved.id+"/paid", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({paid_until: input.value})})
+    .then(function(r){return r.json().then(function(d){return {ok:r.ok, d:d}})})
+    .then(function(res){
+      if (!res.ok || !res.d.alarm_at) { window.alert(res.d.error || "Couldn’t update the alarm."); return; }
+      saved.alarm_at = res.d.alarm_at; saved.reason = res.d.reason; saved.reminders = res.d.reminders || [];
+      localStorage.setItem(KEY, JSON.stringify(saved));
+      showParked(saved);
+    }).catch(function(){window.alert("Couldn’t update the alarm.")});
+}
+function loadHelp(){
+  var box = document.getElementById("helplinks");
+  if (!box) return;
+  fetch("/help").then(function(r){return r.json()}).then(function(d){
+    box.innerHTML = (d.links || []).map(function(l){return '<a class="btn alt" href="'+esc(l.url)+'">'+esc(l.name)+'</a>'}).join("");
+  }).catch(function(){});
+}
+function showPermits(){
+  var list = savedPermits();
+  var h = '<section class="box"><h2>My permit districts</h2><p>Preferential parking that matches a district you save is not applied to you. Type the district from your permit, such as PPD 118.</p>';
+  h += '<ul class="spots">'+list.map(function(n){return '<li>'+esc(n)+'</li>'}).join("")+'</ul>';
+  h += '<label for="permitadd">District</label><input id="permitadd" type="text" placeholder="PPD 118">';
+  h += '<button id="permitsave" type="button">Save district</button></section>';
+  out.innerHTML = h;
+  document.getElementById("permitsave").addEventListener("click", function(){
+    savePermitName(document.getElementById("permitadd").value); showPermits();
+  });
+}
+function showHolidays(){
+  say("Loading the city holiday calendar…");
+  var year = new Date().getFullYear();
+  fetch("/holidays?year="+year).then(function(r){return r.json()}).then(function(d){
+    var h = '<section class="box"><h2>LADOT holidays '+esc(d.year)+'</h2><p>Meters, time limits, and timed no-parking are off on meter holidays. Street sweeping is also off those days, plus Cesar Chavez Day and the day after Thanksgiving. Red curbs stay red.</p><ul class="spots">';
+    (d.holidays || []).forEach(function(item){
+      h += '<li><b>'+esc(item.date)+'</b> '+esc(item.name)+' · '+(item.meters_off ? "meters off" : "sweeping only")+'</li>';
+    });
+    h += '</ul></section>';
+    out.innerHTML = h;
+  }).catch(function(){say("Couldn’t load holidays.")});
+}
+function showTicketHelp(){
+  say("Loading official links…");
+  fetch("/help").then(function(r){return r.json()}).then(function(d){
+    var h = '<section class="box"><h2>Ticket or tow</h2><p>These are LADOT’s pages. A parked session can also export the sign photo names, times, location, and rules the app showed.</p>';
+    (d.links || []).forEach(function(l){h += '<a class="btn" href="'+esc(l.url)+'">'+esc(l.name)+'</a>'});
+    h += '</section>';
+    out.innerHTML = h;
+  }).catch(function(){say("Couldn’t load the links.")});
+}
 document.getElementById("autosetup").addEventListener("click", showAutoSetup);
+document.getElementById("permits").addEventListener("click", showPermits);
+document.getElementById("holidays").addEventListener("click", showHolidays);
+document.getElementById("tickethelp").addEventListener("click", showTicketHelp);
+ensureToken().catch(function(){});
 document.getElementById("alertsettings").addEventListener("click", showAlertSettings);
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", function(e){
   if (!e.data || e.data.type !== "alarm") return;

@@ -41,6 +41,11 @@ def connect():
         token TEXT PRIMARY KEY, sub_id TEXT, created TEXT, settings TEXT);
       CREATE TABLE IF NOT EXISTS photos (
         id TEXT PRIMARY KEY, scan_id TEXT, park_id TEXT, path TEXT, created TEXT);
+      CREATE TABLE IF NOT EXISTS reports (
+        id TEXT PRIMARY KEY, device_token TEXT, lat REAL, lng REAL, kind TEXT,
+        note TEXT, created TEXT, expires TEXT, confirms INTEGER DEFAULT 1);
+      CREATE TABLE IF NOT EXISTS report_votes (
+        report_id TEXT, device_token TEXT, PRIMARY KEY (report_id, device_token));
     """)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(parks)")}
     if "device_token" not in cols:
@@ -49,6 +54,8 @@ def connect():
         conn.execute("ALTER TABLE parks ADD COLUMN settings TEXT")
     if "snooze_until" not in cols:
         conn.execute("ALTER TABLE parks ADD COLUMN snooze_until TEXT")
+    if "snapshot" not in cols:
+        conn.execute("ALTER TABLE parks ADD COLUMN snapshot TEXT")
     dcols = {row[1] for row in conn.execute("PRAGMA table_info(devices)")}
     if "settings" not in dcols:
         conn.execute("ALTER TABLE devices ADD COLUMN settings TEXT")
@@ -184,7 +191,7 @@ def upsert_sub(sub):
     return sid
 
 
-def save_park(lat, lng, address, move_by, reason, headline, sub_id, now, device_token=None, settings=None):
+def save_park(lat, lng, address, move_by, reason, headline, sub_id, now, device_token=None, settings=None, snapshot=None):
     """move_by is an aware datetime or None. Reminders are skipped when there is no deadline."""
     pid = uuid.uuid4().hex
     cleaned = clean_settings(settings)
@@ -192,10 +199,10 @@ def save_park(lat, lng, address, move_by, reason, headline, sub_id, now, device_
     with LOCK:
         conn = connect()
         conn.execute("""INSERT INTO parks
-            (id, lat, lng, address, move_by, reason, headline, sub_id, created, cancelled, device_token, settings, snooze_until)
-            VALUES (?,?,?,?,?,?,?,?,?,0,?,?,NULL)""", (
+            (id, lat, lng, address, move_by, reason, headline, sub_id, created, cancelled, device_token, settings, snooze_until, snapshot)
+            VALUES (?,?,?,?,?,?,?,?,?,0,?,?,NULL,?)""", (
             pid, lat, lng, address or "", move_by.isoformat() if move_by else None,
-            reason or "", headline or "", sub_id, now.isoformat(), device_token, json.dumps(cleaned)))
+            reason or "", headline or "", sub_id, now.isoformat(), device_token, json.dumps(cleaned), snapshot))
         for item in fires:
             conn.execute("INSERT INTO reminders(park_id, fire_at, kind, sent) VALUES(?,?,?,0)",
                          (pid, item["at"].isoformat(), item["kind"]))
@@ -328,14 +335,108 @@ def snooze_park(park_id, now, minutes=None):
     return {"snooze_until": until.isoformat(), "minutes": minutes}
 
 
+REPORT_HOURS = {"temp_no_parking": 8, "broken_meter": 24 * 14, "enforcement": 2}
+
+
+def create_report(token, lat, lng, kind, note, now, hours=None):
+    if not valid_token(token) or not get_device(token):
+        raise PermissionError("unknown token")
+    if kind not in REPORT_HOURS:
+        raise ValueError("kind must be temp_no_parking, broken_meter, or enforcement")
+    try:
+        hours = int(hours) if hours else REPORT_HOURS[kind]
+    except (TypeError, ValueError):
+        raise ValueError("bad duration")
+    cap = 24 * 30 if kind == "broken_meter" else 48
+    if not 1 <= hours <= cap:
+        raise ValueError("duration is out of range")
+    note = (note or "").strip()[:240]
+    with LOCK:
+        conn = connect()
+        since = (now - timedelta(hours=1)).isoformat()
+        recent = conn.execute(
+            "SELECT COUNT(*) FROM reports WHERE device_token=? AND created>=?", (token, since)).fetchone()[0]
+        if recent >= 5:
+            raise ValueError("Too many reports from this phone in the last hour.")
+        rid = uuid.uuid4().hex
+        expires = now + timedelta(hours=hours)
+        conn.execute("INSERT INTO reports VALUES (?,?,?,?,?,?,?,?,1)",
+                     (rid, token, lat, lng, kind, note, now.isoformat(), expires.isoformat()))
+        conn.execute("INSERT INTO report_votes VALUES (?,?)", (rid, token))
+        conn.commit()
+    return {"id": rid, "kind": kind, "expires": expires.isoformat(), "confirms": 1, "note": note,
+            "lat": lat, "lng": lng}
+
+
+def confirm_report(token, report_id, now):
+    if not valid_token(token) or not get_device(token):
+        raise PermissionError("unknown token")
+    with LOCK:
+        conn = connect()
+        row = conn.execute("SELECT id, expires, confirms FROM reports WHERE id=?", (report_id,)).fetchone()
+        if not row or row[1] <= now.isoformat():
+            return None
+        if conn.execute("SELECT 1 FROM report_votes WHERE report_id=? AND device_token=?",
+                        (report_id, token)).fetchone():
+            return {"id": report_id, "confirms": row[2], "already": True}
+        since = (now - timedelta(hours=1)).isoformat()
+        votes = conn.execute(
+            "SELECT COUNT(*) FROM report_votes WHERE device_token=? AND report_id IN "
+            "(SELECT id FROM reports WHERE created>=?)", (token, since)).fetchone()[0]
+        if votes >= 30:
+            raise ValueError("Too many confirms from this phone in the last hour.")
+        conn.execute("INSERT INTO report_votes VALUES (?,?)", (report_id, token))
+        conn.execute("UPDATE reports SET confirms=confirms+1 WHERE id=?", (report_id,))
+        conn.commit()
+        confirms = row[2] + 1
+    return {"id": report_id, "confirms": confirms, "already": False}
+
+
+def active_reports(lat, lng, now, radius=150):
+    conn = connect()
+    box = radius * 1.6e-5
+    rows = conn.execute(
+        "SELECT id, lat, lng, kind, note, expires, confirms FROM reports WHERE expires>? "
+        "AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?",
+        (now.isoformat(), lat - box, lat + box, lng - box, lng + box)).fetchall()
+    return [{"id": r[0], "lat": r[1], "lng": r[2], "kind": r[3], "note": r[4],
+             "expires": r[5], "confirms": r[6]} for r in rows]
+
+
+def reschedule_paid(park_id, paid_until, now):
+    """Point alerts at the time the meter is paid through. Sweeping and tow-away stay sooner."""
+    with LOCK:
+        conn = connect()
+        row = conn.execute(
+            "SELECT move_by, reason, settings, cancelled FROM parks WHERE id=?", (park_id,)).fetchone()
+        if not row or row[3]:
+            return None
+        old = datetime.fromisoformat(row[0]) if row[0] else None
+        if restriction_family(row[1]) and old and paid_until > old:
+            return {"ok": False, "error": "A sweeping or tow-away time is sooner than this payment. Alerts stay at that earlier deadline.",
+                    "alarm_at": row[0]}
+        if paid_until <= now:
+            return {"ok": False, "error": "Paid-until has to be later than now."}
+        conn.execute("DELETE FROM reminders WHERE park_id=? AND sent=0", (park_id,))
+        conn.execute("UPDATE parks SET move_by=?, reason=? WHERE id=?",
+                     (paid_until.isoformat(), "Meter payment ends", park_id))
+        fires = plan_alerts(paid_until, now, "Meter payment ends", row[2])
+        for item in fires:
+            conn.execute("INSERT INTO reminders(park_id, fire_at, kind, sent) VALUES(?,?,?,0)",
+                         (park_id, item["at"].isoformat(), item["kind"]))
+        conn.commit()
+    return {"ok": True, "alarm_at": paid_until.isoformat(), "reason": "Meter payment ends",
+            "reminders": [{"at": i["at"].isoformat(), "kind": i["kind"], "level": i["level"]} for i in fires]}
+
+
 def get_park(park_id):
     conn = connect()
     row = conn.execute(
-        "SELECT id, lat, lng, address, move_by, reason, headline, cancelled, created, settings, snooze_until FROM parks WHERE id=?",
+        "SELECT id, lat, lng, address, move_by, reason, headline, cancelled, created, settings, snooze_until, snapshot FROM parks WHERE id=?",
         (park_id,)).fetchone()
     if not row:
         return None
-    keys = ("id", "lat", "lng", "address", "move_by", "reason", "headline", "cancelled", "created", "settings", "snooze_until")
+    keys = ("id", "lat", "lng", "address", "move_by", "reason", "headline", "cancelled", "created", "settings", "snooze_until", "snapshot")
     return dict(zip(keys, row))
 
 

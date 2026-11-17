@@ -81,6 +81,20 @@ Environment variables, set in the Render dashboard, never committed:
 
 `render.yaml` lists `SIGN_VISION_API_KEY` with `sync: false`.
 
+## Pay, nearby spots, and the walk back
+
+On a metered session, **Pay the meter** lists LADOT’s payment page, ParkMobile’s Los Angeles page, and — once you type the zone from the meter sticker — a text to **77447**. The city meter feed has a space id, not that zone number. After you pay, set **Paid until** and the alarms move to that time. If street sweeping or a tow-away window is sooner, the earlier deadline stays.
+
+**Find a legal spot nearby** lists curb segments within about 350 m that the city data says are legal right now, nearest first, with how long you can stay. A simple map of dots sits above the list. **Walk there** and the parked screen’s **Directions** open Apple Maps walking directions to the pin saved with the session.
+
+## Reports, tickets, permits, holidays
+
+**Report this block** can flag temporary no-parking (filming or construction, 8 hours unless you set another length up to 48), a broken meter (two weeks), or an enforcement or tow truck (2 hours). Another phone can tap **Still true** once. A phone can file 5 reports an hour. An unexpired temporary no-parking report within 40 m makes the spot **No**. The other two kinds are shown and do not change the legal answer.
+
+**Ticket or tow** links to LADOT’s citation payment page, the PayTix portal, the contest / initial-review contact page, and the booted-and-towed page. **Export evidence** downloads the session’s place, times, rules that were shown, and the names of sign photos saved with it.
+
+**My permit districts** saves the preferential district on your permit (for example PPD 118). A matching district is not applied to you. **City holidays** lists the year: meters off, or sweeping only.
+
 ## What the check returns
 
 `GET /check?lat=&lng=` or `POST /check` with a sign. `POST /park` saves the spot and schedules reminders.

@@ -115,6 +115,32 @@ def sweeping_holiday_name(d):
     return None
 
 
+def holiday_calendar(year):
+    """Every city holiday in `year`: meters off, or sweeping only (Cesar Chavez, day after Thanksgiving)."""
+    out = []
+    d = date(year, 1, 1)
+    while d.year == year:
+        meters = holiday_name(d)
+        sweep = sweeping_holiday_name(d)
+        if meters or sweep:
+            out.append({"date": d.isoformat(), "name": meters or sweep,
+                        "meters_off": bool(meters), "sweeping_off": bool(sweep)})
+        d += timedelta(days=1)
+    return out
+
+
+def permit_covers(district, saved):
+    """True when a saved permit name or number matches this district."""
+    if not district or not saved:
+        return False
+    blob = str(district).lower()
+    for item in saved:
+        key = str(item).strip().lower()
+        if len(key) >= 2 and (key in blob or blob in key):
+            return True
+    return False
+
+
 def holiday_note(d):
     full = holiday_name(d)
     if full:

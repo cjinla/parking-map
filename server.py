@@ -17,9 +17,11 @@ from urllib.parse import urlencode, urlparse, parse_qs
 from zoneinfo import ZoneInfo
 
 import alarms
+import citylinks
 import signread
 from ingest import DB as DATA_DB
-from rules import Rule, WEEKDAYS, answer, apply_sign, clock_label, parse_days, rule_from_json, to_dict
+from rules import (Rule, WEEKDAYS, answer, apply_sign, clock_label, holiday_calendar,
+                   parse_days, permit_covers, rule_from_json, to_dict)
 from signparse import sign_conflicts
 
 DB = os.environ.get("PARKING_DB", DATA_DB)
@@ -220,8 +222,11 @@ def lookup(lat, lng, now, radius=40):
     s = find_spot(lat, lng, radius)
     return s["rules"], s["address"], s["confidence"], s["warnings"]
 
-def assemble(lat, lng, now, sign=None, has_permit=False, radius=40, searched=None):
+def assemble(lat, lng, now, sign=None, has_permit=False, radius=40, searched=None, permits=None):
     spot = find_spot(lat, lng, radius)
+    saved_permit = permit_covers(spot.get("permit_district"), permits)
+    if saved_permit:
+        has_permit = True
     rules = [r for r in spot["rules"] if not (has_permit and r.kind == "permit")]
     conflict_notes = sign_conflicts(rules, sign) if sign else []
     if sign:
@@ -236,6 +241,14 @@ def assemble(lat, lng, now, sign=None, has_permit=False, radius=40, searched=Non
         warnings.insert(0, note)
     if not rules and not warnings:
         warnings.append("Nothing in the city data matches this curb. Read the sign, or the block may be outside Los Angeles.")
+    if saved_permit and spot.get("permit_district"):
+        warnings.append("Your saved permit matches " + spot["permit_district"] + ", so that permit rule is not applied to you.")
+    reports = _report_view(alarms.active_reports(lat, lng, now), lat, lng)
+    blocks = [r for r in reports if r["kind"] == "temp_no_parking" and r["distance_m"] <= 40]
+    if blocks:
+        warnings.insert(0, "Temporary no-parking reported nearby until " + blocks[0]["expires"] + ". " + (blocks[0].get("note") or ""))
+        out.update(status="no", can_park=False, answer_word="No", headline="Do not park here",
+                   reason="Temporary no-parking reported nearby", move_by=None, move_by_text="Now")
     out.update(
         searched=searched, address=spot["address"], segment=spot["segment"], space_id=spot["space_id"],
         distance_m=spot["distance_m"] if spot["meter_used"] else None,
@@ -243,10 +256,98 @@ def assemble(lat, lng, now, sign=None, has_permit=False, radius=40, searched=Non
         permit_district=spot["permit_district"], confidence=spot["confidence"] if not sign else "high",
         warnings=warnings, coverage=COVERAGE, rules=[to_dict(r) for r in rules],
         disclaimer=DISCLAIMER, sources=SOURCES, lat=lat, lng=lng,
-        checked_at=now.isoformat())
+        checked_at=now.isoformat(), reports=reports,
+        payment=citylinks.payment_options(spot.get("space_id")) if spot.get("meter_used") else None,
+        saved_permit=saved_permit)
     if out.get("hours_known") is False:
         out["confidence"] = "low"
     return out
+
+def _report_view(rows, lat, lng):
+    out = []
+    for r in rows:
+        item = dict(r)
+        item["distance_m"] = int(round(dist(lat, lng, r["lat"], r["lng"])))
+        if item["distance_m"] <= 150:
+            out.append(item)
+    out.sort(key=lambda r: r["distance_m"])
+    return out
+
+
+def legal_nearby(lat, lng, now, radius=350):
+    """Curb segments within a few blocks that are legal right now, nearest first."""
+    try:
+        db = sqlite3.connect(DB)
+    except sqlite3.Error:
+        return []
+    box = radius * 1.6e-5
+    try:
+        rows = db.execute(
+            "SELECT lat,lng,address,rules,id FROM meters WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?",
+            (lat - box, lat + box, lng - box, lng + box)).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    finally:
+        db.close()
+    best = {}
+    for row in rows:
+        meters = dist(lat, lng, row[0], row[1])
+        if meters > radius:
+            continue
+        key = row[2] or row[4] or (row[0], row[1])
+        if key not in best or meters < best[key][0]:
+            best[key] = (meters, row)
+    blocked = alarms.active_reports(lat, lng, now, radius)
+    spots = []
+    for meters, row in list(best.values())[:40]:
+        if any(r["kind"] == "temp_no_parking" and dist(row[0], row[1], r["lat"], r["lng"]) <= 40 for r in blocked):
+            continue
+        try:
+            rules = [rule_from_json(item) for item in json.loads(row[3] or "[]")]
+        except (TypeError, ValueError):
+            continue
+        ans = answer(rules, now)
+        if ans.get("can_park") is not True:
+            continue
+        stay = None
+        if ans.get("move_by"):
+            stay = max(0, int((datetime.fromisoformat(ans["move_by"]) - now).total_seconds() // 60))
+        spots.append({"lat": row[0], "lng": row[1], "address": row[2], "space_id": row[4],
+                      "distance_m": int(round(meters)), "stay_minutes": stay,
+                      "move_by_text": ans.get("move_by_text"), "headline": ans.get("headline")})
+    spots.sort(key=lambda s: (s["distance_m"], -(s["stay_minutes"] if s["stay_minutes"] is not None else 10**9)))
+    return spots[:12]
+
+
+def evidence_text(park_id):
+    row = alarms.get_park(park_id)
+    if not row:
+        return None
+    conn = alarms.connect()
+    photos = conn.execute("SELECT path, created FROM photos WHERE park_id=?", (park_id,)).fetchall()
+    lines = [
+        "Los Angeles parking session evidence",
+        "Session: " + row["id"],
+        "Saved: " + (row.get("created") or ""),
+        "Location: " + str(row.get("lat")) + ", " + str(row.get("lng")),
+        "Place: " + (row.get("address") or ""),
+        "Move by: " + (row.get("move_by") or "none"),
+        "Reason: " + (row.get("reason") or ""),
+        "Headline: " + (row.get("headline") or ""),
+        "",
+        "Rules and warnings shown:",
+        row.get("snapshot") or "(no snapshot was stored)",
+        "",
+        "Sign photos stored with this session:",
+    ]
+    if photos:
+        for path, created in photos:
+            lines.append("- " + os.path.basename(path) + " saved " + (created or ""))
+    else:
+        lines.append("(none)")
+    lines += ["", "Posted signs override this app. This export is a record of what the app showed, not a copy of the citation."]
+    return "\n".join(lines) + "\n"
+
 
 def _alarm_at(result, now):
     if result["status"] in ("no", "permit"):
@@ -255,11 +356,13 @@ def _alarm_at(result, now):
         return datetime.fromisoformat(result["move_by"])
     return None
 
-def park(lat, lng, now, sign=None, has_permit=False, radius=40, sub_id=None, searched=None, device_token=None, settings=None):
-    result = assemble(lat, lng, now, sign, has_permit, radius, searched)
+def park(lat, lng, now, sign=None, has_permit=False, radius=40, sub_id=None, searched=None, device_token=None, settings=None, permits=None):
+    result = assemble(lat, lng, now, sign, has_permit, radius, searched, permits)
     when = _alarm_at(result, now)
+    snapshot = json.dumps({"rules": result.get("rules"), "warnings": result.get("warnings"),
+                           "headline": result.get("headline"), "checked_at": result.get("checked_at")})
     saved = alarms.save_park(lat, lng, result.get("address") or result.get("segment"), when,
-                             result.get("reason"), result.get("headline"), sub_id, now, device_token, settings)
+                             result.get("reason"), result.get("headline"), sub_id, now, device_token, settings, snapshot)
     result.update(saved)
     result["alarm_at"] = saved["alarm_at"]
     return result
@@ -333,11 +436,28 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         path = u.path.rstrip("/") or "/"
+        q = {k: v[0] for k, v in parse_qs(u.query).items()}
         if path in FILES:
             rel, ctype = FILES[path]
             return self.send_file(rel, ctype, "no-cache" if rel.endswith((".html", ".js", ".webmanifest")) else "public, max-age=86400")
         if path in ("/autopark",):
             return self.send_file("index.html", "text/html; charset=utf-8", "no-cache")
+        if path == "/holidays":
+            try:
+                year = int(q["year"]) if "year" in q else datetime.now(TZ).year
+            except ValueError:
+                return self.reply(400, {"error": "bad year"})
+            return self.reply(200, {"year": year, "holidays": holiday_calendar(year)})
+        if path == "/nearby":
+            try:
+                lat, lng = float(q["lat"]), float(q["lng"])
+            except (KeyError, ValueError):
+                return self.reply(400, {"error": "give lat and lng"})
+            return self.reply(200, {"spots": legal_nearby(lat, lng, self.when(q.get("at")))})
+        if path == "/pay":
+            return self.reply(200, citylinks.payment_options(q.get("space"), q.get("zone")))
+        if path == "/help":
+            return self.reply(200, {"links": citylinks.help_links()})
         if path == "/push/public-key":
             return self.reply(200, {"publicKey": os.environ.get("VAPID_PUBLIC_KEY", ""), "configured": alarms.push_configured()})
         if path == "/api/device/latest":
@@ -345,13 +465,24 @@ class H(BaseHTTPRequestHandler):
         ics = re.fullmatch(r"/park/([a-f0-9]{32})\.ics", path)
         if ics:
             return self.calendar(ics.group(1))
+        evidence = re.fullmatch(r"/park/([a-f0-9]{32})/evidence", path)
+        if evidence:
+            text = evidence_text(evidence.group(1))
+            if text is None:
+                return self.reply(404, {"error": "That parked session is gone."})
+            data = text.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Disposition", "attachment; filename=parking-evidence.txt")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            return self.wfile.write(data)
         one = re.fullmatch(r"/park/([a-f0-9]{32})", path)
         if one:
             row = alarms.get_park(one.group(1))
             return self.reply(200, row) if row else self.reply(404, {"error": "That parked session is gone. Park again."})
         if path != "/check":
             return self.reply(404, {"error": "use /check?lat=&lng="})
-        q = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
             lat, lng, searched, radius = self.locate(q)
         except LookupError as e:
@@ -361,7 +492,8 @@ class H(BaseHTTPRequestHandler):
         except ValueError as e:
             return self.reply(400, {"error": str(e)})
         now = self.when(q.get("at"))
-        self.reply(200, assemble(lat, lng, now, has_permit=q.get("has_permit") == "1", radius=radius, searched=searched))
+        permits = [p for p in (q.get("permits") or "").split("|") if p.strip()]
+        self.reply(200, assemble(lat, lng, now, has_permit=q.get("has_permit") == "1", radius=radius, searched=searched, permits=permits))
 
     def do_POST(self):
         u = urlparse(self.path)
@@ -381,6 +513,14 @@ class H(BaseHTTPRequestHandler):
             return self.device_http(body)
         if path == "/api/sign":
             return self.sign_body(body)
+        if path == "/api/reports":
+            return self.report_body(body)
+        confirm = re.fullmatch(r"/api/reports/([a-f0-9]{32})/confirm", path)
+        if confirm:
+            return self.confirm_body(confirm.group(1), body)
+        paid = re.fullmatch(r"/park/([a-f0-9]{32})/paid", path)
+        if paid:
+            return self.paid_body(paid.group(1), body)
         if path == "/push/subscribe":
             return self.subscribe(body)
         cancel = re.fullmatch(r"/park/([a-f0-9]{32})/cancel", path)
@@ -425,7 +565,7 @@ class H(BaseHTTPRequestHandler):
             lat, lng, searched, radius = self.locate(body)
             now = self.when(body.get("at"))
             out = assemble(lat, lng, now, sign=body.get("sign"), has_permit=bool(body.get("has_permit")),
-                           radius=radius, searched=searched)
+                           radius=radius, searched=searched, permits=body.get("permits"))
         except LookupError as e:
             return self.reply(200, {"status": "unknown", "headline": str(e), "answer_word": "Unknown", "can_park": None,
                                     "warnings": [], "gaps": [], "coverage": COVERAGE, "disclaimer": DISCLAIMER})
@@ -441,7 +581,8 @@ class H(BaseHTTPRequestHandler):
             if body.get("subscription"):
                 sub_id = alarms.upsert_sub(body["subscription"])
             out = park(lat, lng, now, sign=body.get("sign"), has_permit=bool(body.get("has_permit")),
-                       radius=radius, sub_id=sub_id, searched=searched, settings=body.get("settings"))
+                       radius=radius, sub_id=sub_id, searched=searched, settings=body.get("settings"),
+                       permits=body.get("permits"))
             if body.get("scan_id"):
                 out["photos_saved"] = signread.attach_scan(str(body["scan_id"])[:64], out["id"])
         except LookupError as e:
@@ -519,6 +660,46 @@ class H(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 city = []
         self.reply(200, signread.read_sign(images, city))
+
+    def report_body(self, body):
+        try:
+            lat, lng = float(body["lat"]), float(body["lng"])
+        except (KeyError, TypeError, ValueError):
+            return self.reply(400, {"error": "give lat and lng"})
+        try:
+            out = alarms.create_report(body.get("token") or "", lat, lng, body.get("kind") or "",
+                                       body.get("note") or "", self.when(body.get("at")), body.get("hours"))
+        except PermissionError:
+            return self.reply(401, {"error": "Open the app once so this phone has a token, then report again."})
+        except ValueError as e:
+            return self.reply(400, {"error": str(e)})
+        return self.reply(200, out)
+
+    def confirm_body(self, report_id, body):
+        try:
+            out = alarms.confirm_report(body.get("token") or "", report_id, self.when(body.get("at")))
+        except PermissionError:
+            return self.reply(401, {"error": "Open the app once so this phone has a token."})
+        except ValueError as e:
+            return self.reply(400, {"error": str(e)})
+        return self.reply(200, out) if out else self.reply(404, {"error": "That report has expired."})
+
+    def paid_body(self, park_id, body):
+        raw = body.get("paid_until")
+        if not raw:
+            return self.reply(400, {"error": "give paid_until"})
+        try:
+            when = datetime.fromisoformat(str(raw))
+        except ValueError:
+            return self.reply(400, {"error": "paid_until must be a time"})
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=TZ)
+        else:
+            when = when.astimezone(TZ)
+        out = alarms.reschedule_paid(park_id, when, self.when(body.get("at")))
+        if out is None:
+            return self.reply(404, {"error": "That parked session is gone."})
+        return self.reply(200 if out.get("ok") else 409, out)
 
     def read_json(self, limit=100_000):
         n = int(self.headers.get("Content-Length") or 0)
