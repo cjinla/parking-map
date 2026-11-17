@@ -408,11 +408,72 @@ assert kept["ok"] is False and kept["alarm_at"].startswith("2026-10-23T12:00")
 text = server.evidence_text(paid_park["id"])
 assert "THERE ST" in text and "Rules and warnings shown" in text
 
+# E 7th St & Gladys Ave. Census geocoder: 34.038684, -118.243886.
+# Posted sweeping areas that contain that point, and the nearest real meter (801 Agatha St, 186 m).
+assert parse_days("Monday to Friday") == [0, 1, 2, 3, 4]
+assert parse_days("Mon, Tue, Wed, Thu, & Fri") == [0, 1, 2, 3, 4]
+gladys_routes = [
+    {"Route": "DT 2", "Posted_Time": "1 am - 4 am", "Posted_Day": "Monday to Friday",
+     "Day_Short": "Mon, Tue, Wed, Thu, & Fri",
+     "Boundaries": "Central Ave to Figueroa St / 5th St to 9th St"},
+    {"Route": "Skid Row W", "Posted_Time": "1 am - 4 am", "Posted_Day": "Wednesday",
+     "Day_Short": "Wed", "Boundaries": "San Pedro St to Central Av / 3rd St to 7th St"},
+    {"Route": "Skid Row F", "Posted_Time": "1 am - 4 am", "Posted_Day": "Friday",
+     "Day_Short": "Fri", "Boundaries": "San Pedro St to Central Av / 3rd St to 7th St"},
+]
+dt2, dt2_warn = server.sweep_from_props(gladys_routes[0])
+assert dt2[0].days == [0, 1, 2, 3, 4] and dt2[0].start == 60 and dt2[0].end == 240 and "DT 2" in dt2[0].label
+assert "Central Ave" in dt2_warn and dt2[0].skip_holidays and dt2[0].also_sweep_holidays
+GLADYS = (34.038684, -118.243886)
+AGATHA = (34.03802, -118.245733)
+
+def _box(lat, lng, pad=0.0012):
+    ring = [[lng - pad, lat - pad], [lng + pad, lat - pad], [lng + pad, lat + pad],
+            [lng - pad, lat + pad], [lng - pad, lat - pad]]
+    return {"type": "Polygon", "coordinates": [ring]}
+
+gdb = sqlite3.connect("gladys.db")
+gdb.executescript("""CREATE TABLE meters(id,lat,lng,address,rules);
+  CREATE TABLE sweep(id,props,geom,minlat,maxlat,minlng,maxlng);
+  CREATE TABLE ppd(props,geom,minlat,maxlat,minlng,maxlng);""")
+agatha_rules = ingest.meter_rules({"timelimit": "2HR", "raterange": "$1.00 - $2.50", "ratetype": "TOD"})
+gdb.execute("INSERT INTO meters VALUES('ED832',?,?,?,?)",
+            (AGATHA[0], AGATHA[1], "801 AGATHA ST", json.dumps(agatha_rules)))
+geom = _box(*GLADYS)
+pts = geom["coordinates"][0]
+for i, props in enumerate(gladys_routes):
+    gdb.execute("INSERT INTO sweep VALUES(?,?,?,?,?,?,?)",
+                (i, json.dumps(props), json.dumps(geom),
+                 min(p[1] for p in pts), max(p[1] for p in pts),
+                 min(p[0] for p in pts), max(p[0] for p in pts)))
+gdb.commit()
+gdb.close()
+server.DB = "gladys.db"
+night = server.assemble(*GLADYS, at("2026-11-16T02:00"))  # Monday, sweeping in effect
+assert night["status"] == "no" and night["can_park"] is False and "DT 2" in night["reason"], night
+assert night["until"].startswith("2026-11-16T04:00")
+assert all(r["kind"] != "limit" for r in night["rules"])
+assert any("801 AGATHA ST" in w and "not applied" in w for w in night["warnings"])
+assert any("San Pedro" in w for w in night["warnings"]) and any("Figueroa" in w for w in night["warnings"])
+assert {g["id"] for g in night["gaps"]} >= {"meter", "tow", "curb"}
+assert "sweep" not in {g["id"] for g in night["gaps"]}
+day = server.assemble(*GLADYS, at("2026-11-16T10:00"))
+assert day["can_park"] is True and day["move_by"].startswith("2026-11-17T01:00"), day
+weekend = server.assemble(*GLADYS, at("2026-11-21T02:00"))  # Saturday, DT 2 is weekdays only
+assert weekend["can_park"] is True and weekend["move_by"].startswith("2026-11-23T01:00"), weekend
+veterans = server.assemble(*GLADYS, at("2026-11-11T02:00"))
+assert veterans["can_park"] is True and "Veterans Day" in (veterans.get("holiday_note") or "")
+assert veterans["move_by"].startswith("2026-11-12T01:00"), veterans
+meter_spot = server.assemble(*AGATHA, at("2026-10-23T14:00"))
+assert meter_spot["facts"]["time_limit"].startswith("2 hours") and meter_spot["meter"]["hours_known"] is False
+assert "$1.00 - $2.50" in meter_spot["facts"]["meter"] and "changes by time of day" in meter_spot["facts"]["meter"]
+assert "Check the sign" in meter_spot["headline"]
+
 import shutil
 shutil.rmtree(signread.PHOTO_DIR, ignore_errors=True)
 os.remove("test.db")
 for name in ("test-sessions.db", "test-sessions.db-wal", "test-sessions.db-shm",
              "test-alerts.db", "test-alerts.db-wal", "test-alerts.db-shm",
-             "test-reports.db", "test-reports.db-wal", "test-reports.db-shm", "nearby.db"):
+             "test-reports.db", "test-reports.db-wal", "test-reports.db-shm", "nearby.db", "gladys.db"):
     if os.path.exists(name): os.remove(name)
 print("all tests passed")

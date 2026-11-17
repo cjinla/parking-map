@@ -157,6 +157,14 @@ def holiday_note(d):
     return extra + ": street sweeping is not enforced. Meters and other restrictions still count."
 
 
+def _day_index(word):
+    word = word.strip(" .").lower()
+    for name, idx in _DAY_TOKENS:
+        if word == name:
+            return idx
+    return None
+
+
 def parse_days(text):
     """'Th,F', 'Tu', 'weekdays', 'Wednesday' -> weekday numbers. Unknown text -> []."""
     if not text:
@@ -168,6 +176,13 @@ def parse_days(text):
         return list(range(5))
     if t in ("weekends", "weekend"):
         return [5, 6]
+    span = re.fullmatch(r"([a-z]+)\s+(?:to|through|-)\s+([a-z]+)", t)
+    if span:
+        a, b = _day_index(span[1]), _day_index(span[2])
+        if a is not None and b is not None:
+            if a <= b:
+                return list(range(a, b + 1))
+            return list(range(a, 7)) + list(range(0, b + 1))
     out = []
     for part in re.split(r"[,&/]|\band\b|\s+", t):
         part = part.strip(" .")

@@ -21,12 +21,38 @@ def get(url):
 
 SWEEP_ALT = "https://data.lacity.org/resource/krk7-ayq2.geojson?$limit=5000"   # city open-data copy of posted routes
 SWEEP_BASE = "https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/ArcGIS/rest/services/ADAPT_AMRoutes/FeatureServer"   # major-street sweeping routes (has a Day field, no times)
+# Downtown and posted areas, including Skid Row. These polygons carry the posted day and the clock time.
+POSTED_SWEEP = ("https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/ArcGIS/rest/services/"
+                "Posted_Street_Sweeping_Routes_Update/FeatureServer/0")
+POSTED_SWEEP_FIELDS = "Route,Posted_Time,Boundaries,Posted_Day,Day_Short,Route_Type,Day"
 
 def esri_to_geo(f):
     """This service only speaks Esri JSON (rings), so convert it to a GeoJSON-style feature."""
     rings = (f.get("geometry") or {}).get("rings")
     geom = {"type": "MultiPolygon", "coordinates": [[r] for r in rings]} if rings else None
     return {"properties": f.get("attributes") or {}, "geometry": geom}
+
+def arcgis_features(layer_url, fields="*"):
+    """Page an Esri feature layer. Stops if a page repeats, and never raises."""
+    feats, offset, seen = [], 0, set()
+    try:
+        while True:
+            data = get(f"{layer_url}/query?where=1%3D1&outFields={fields}&outSR=4326&f=json"
+                       f"&resultOffset={offset}&resultRecordCount=500")
+            if "error" in data:
+                raise RuntimeError(str(data["error"])[:200])
+            page = [esri_to_geo(f) for f in data.get("features", [])]
+            keys = {json.dumps(f.get("properties"), sort_keys=True, default=str) for f in page}
+            if not page or keys <= seen:
+                break
+            seen |= keys
+            feats += page
+            if len(page) < 500 or offset >= 20000:
+                break
+            offset += 500
+    except Exception as e:
+        print(f"Warning: {layer_url.rsplit('/', 2)[-2]} failed: {e}")
+    return feats
 
 def sweep_features():
     """Try the first few layers and page through results. Never crashes the build."""
@@ -165,7 +191,9 @@ def load():
         print("Warning: posted sweeping times not loaded:", e)
     s = matched = 0
     types = {}
-    for i, f in enumerate(sweep_features()):
+    posted_areas = arcgis_features(POSTED_SWEEP, POSTED_SWEEP_FIELDS)
+    print(f"Posted sweeping areas: {len(posted_areas)}", flush=True)
+    for i, f in enumerate(posted_areas + sweep_features()):
         g = f.get("geometry") or {}
         types[g.get("type")] = types.get(g.get("type"), 0) + 1
         props = dict(f.get("properties") or {})

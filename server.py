@@ -27,13 +27,14 @@ from signparse import sign_conflicts
 DB = os.environ.get("PARKING_DB", DATA_DB)
 TZ = ZoneInfo("America/Los_Angeles")
 ROOT = os.path.dirname(os.path.abspath(__file__))
-COVERAGE = ("Uses LADOT meter locations, rates, and time limits; major-street sweeping areas; "
-            "posted sweeping hours when a route id matches; and permit-district boundaries. "
+COVERAGE = ("Uses LADOT meter locations, rates, and time limits; posted sweeping areas that include "
+            "days and hours; major-street sweeping areas; and permit-district boundaries. "
             "Meter hours, tow-away zones, and red curbs are not in those feeds.")
 DISCLAIMER = "Posted signs always override this app. Data may be out of date."
 SOURCES = [
     {"name": "LADOT metered parking inventory and policies", "url": "https://data.lacity.org/Transportation/LADOT-Metered-Parking-Inventory-Policies/s49e-q6j2"},
-    {"name": "Posted street sweeping routes", "url": "https://data.lacity.org/Transportation/Posted-Street-Sweeping-Routes/krk7-ayq2"},
+    {"name": "Posted street sweeping areas", "url": "https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/arcgis/rest/services/Posted_Street_Sweeping_Routes_Update/FeatureServer"},
+    {"name": "Posted street sweeping route list", "url": "https://data.lacity.org/Transportation/Posted-Street-Sweeping-Routes/krk7-ayq2"},
     {"name": "BSS major-street sweeping areas (ADAPT)", "url": "https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/arcgis/rest/services/ADAPT_AMRoutes/FeatureServer"},
     {"name": "LADOT preferential parking districts", "url": "https://data.lacity.org/dataset/LADOT_PPD/s3st-6nwi"},
     {"name": "LADOT holiday parking exemptions", "url": "https://ladotparking.org/parking-meters/parking-restrictions-holiday-parking/"},
@@ -106,6 +107,22 @@ def clock_span(text):
 
 def sweep_from_props(props):
     """Return (rules, warning). Hours are attached only when the data actually has them."""
+    posted_time = props.get("Posted_Time") or props.get("posted_time") or ""
+    day_text = props.get("Day_Short") or props.get("Posted_Day") or ""
+    if posted_time and day_text:
+        days = parse_days(day_text)
+        span = clock_span(posted_time)
+        if days and span and span[0] != span[1]:
+            route = str(props.get("Route") or props.get("route") or "").strip()
+            label = "Street sweeping" + (f" ({route})" if route else "")
+            bounds = str(props.get("Boundaries") or props.get("boundaries") or "").strip()
+            warn = "Sweeping area, not one curb side."
+            if bounds:
+                warn += " " + bounds + "."
+            warn += " Check the sign."
+            return [Rule("no", days, span[0], span[1], label,
+                         source="Posted street sweeping areas", confidence="low", skip_holidays=True,
+                         also_sweep_holidays=True, topic="sweep")], warn
     posted = props.get("posted_times") or []
     if posted:
         rules = []
@@ -153,7 +170,7 @@ def find_spot(lat, lng, radius=40):
     except sqlite3.Error as e:
         return _empty_spot([f"Parking data could not be opened ({e})."])
     try:
-        box = 150 * 1.5e-5
+        box = 300 / 111000
         try:
             rows = db.execute(
                 "SELECT lat,lng,address,rules,id FROM meters WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?",
@@ -169,9 +186,10 @@ def find_spot(lat, lng, radius=40):
             if distance_m <= radius:
                 rules += [rule_from_json(r) for r in json.loads(best[3])]
                 address, conf, meter_used = best[2], "high" if rules else "low", True
-            elif distance_m <= 150:
-                warnings.append(f"The nearest meter is {distance_m} m away ({best[2] or 'unknown block'}), so its rules were not applied. It may be the next block.")
+            elif distance_m <= 300:
+                warnings.append(f"The nearest meter is {distance_m} m away ({best[2] or 'unknown block'}), so its time limit was not applied to this curb.")
         seen = set()
+        bare_sweep = []
         try:
             sweep_rows = db.execute(
                 "SELECT props,geom FROM sweep WHERE ? BETWEEN minlat AND maxlat AND ? BETWEEN minlng AND maxlng",
@@ -188,8 +206,16 @@ def find_spot(lat, lng, radius=40):
                 if key not in seen:
                     seen.add(key)
                     rules.append(r)
-            if warn and warn not in warnings and len([w for w in warnings if "swept" in w or "Sweeping" in w]) < 3:
+            if not warn or warn in warnings:
+                continue
+            if found and len([w for w in warnings if "swept" in w or "Sweeping" in w]) < 3:
                 warnings.append(warn)
+            elif not found:
+                bare_sweep.append(warn)
+        if bare_sweep and not any(r.topic == "sweep" for r in rules):
+            for warn in bare_sweep:
+                if warn not in warnings and len([w for w in warnings if "swept" in w or "Sweeping" in w]) < 3:
+                    warnings.append(warn)
         try:
             for props, geom in db.execute(
                     "SELECT props,geom FROM ppd WHERE ? BETWEEN minlat AND maxlat AND ? BETWEEN minlng AND maxlng",

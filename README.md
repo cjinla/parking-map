@@ -110,14 +110,17 @@ Wired to live city files (refreshed when Render builds, via `ingest.py`):
 | Source | What it actually contains | How the app uses it |
 | --- | --- | --- |
 | [LADOT Metered Parking Inventory & Policies](https://data.lacity.org/Transportation/LADOT-Metered-Parking-Inventory-Policies/s49e-q6j2) | Space id, block face, rate type (`FLAT`, `TOD`, `JUMP`), rate range, time limit, coordinates | Nearest meter within 40 m (75 m for a typed address) is the curb segment. Price and time limit are shown. |
+| [Posted street sweeping areas](https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/arcgis/rest/services/Posted_Street_Sweeping_Routes_Update/FeatureServer) | Polygons with a route name, posted day, and posted time. Includes the downtown and Skid Row areas. | If the point is inside an area, that day and time become a no-parking window. The area is not one curb side. |
 | [Posted Street Sweeping Routes](https://data.lacity.org/Transportation/Posted-Street-Sweeping-Routes/krk7-ayq2) | Route id, day (encoded on the route number), start, end, text boundaries. No GPS lines. | Hours are attached only when the route id matches a sweeping area. |
-| [BSS ADAPT major-street sweeping areas](https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/arcgis/rest/services/ADAPT_AMRoutes/FeatureServer) | Polygons, a day field (`Tu`, `Th,F`, …), boundaries text. Usually no hours. | If you are inside an area, the app names the days. It does not invent a clock time. |
+| [BSS ADAPT major-street sweeping areas](https://services1.arcgis.com/PTh9WC0Sf2WS7AAq/arcgis/rest/services/ADAPT_AMRoutes/FeatureServer) | Polygons, a day field (`Tu`, `Th,F`, …), boundaries text. Usually no hours. | If you are inside an area and no posted time was found, the app names the days. It does not invent a clock time. |
 | [LADOT preferential parking districts](https://data.lacity.org/dataset/LADOT_PPD/s3st-6nwi) | District polygon and name. No hours. | A warning, not a ban. Many districts still allow a short stay without a permit. |
 | [LADOT holiday exemptions](https://ladotparking.org/parking-meters/parking-restrictions-holiday-parking/) | Which holidays suspend which rules. | See below. |
 
 Meter rows do **not** include operating hours. The feed’s own description mentions hours, but the published columns are space, block, meter type, rate type, rate range, time limit, and coordinates. When hours are missing, the app says so and still offers a cautious “if the meter is running, the time limit ends at …” deadline. It does not pretend every meter runs 8 AM to 8 PM.
 
 Sweeping areas are blocks or corridors, not a curb side. The app says to check the sign.
+
+E 7th St & Gladys Ave (Census match 34.038684, -118.243886, ZIP 90021) is inside three posted areas: DT 2, Monday–Friday 1:00–4:00 AM, Central Ave to Figueroa St / 5th St to 9th St; and Skid Row on Wednesday and Friday, same 1:00–4:00 AM, San Pedro St to Central Ave / 3rd St to 7th St. The nearest meter in the inventory is about 186 m away at 801 Agatha St (2-hour limit, $1.00–$2.50, rate changes by time of day). That limit is not applied at the intersection. No open dataset has a tow-away segment or a red-curb segment for this corner.
 
 ### Holidays
 
