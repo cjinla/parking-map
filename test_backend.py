@@ -180,6 +180,59 @@ except ValueError:
     pass
 keys = vapid_keys.new_key_material()
 assert len(keys["public_raw"]) == 65 and keys["private_pem"].startswith("-----BEGIN PRIVATE KEY-----")
+
+# Auto-park: a Shortcut posts lat/lng with a per-phone token. No token is committed.
+if os.path.exists("test.db"): os.remove("test.db")
+db = sqlite3.connect("test.db")
+db.executescript("""CREATE TABLE meters(id,lat,lng,address,rules);
+ CREATE TABLE sweep(id,props,geom,minlat,maxlat,minlng,maxlng);
+ CREATE TABLE ppd(props,geom,minlat,maxlat,minlng,maxlng);""")
+db.execute("INSERT INTO meters VALUES('1',34.1016,-118.3387,'HOLLYWOOD BLVD',?)", (json.dumps([{
+    "kind": "limit", "days": list(range(7)), "start": 480, "end": 1080, "label": "2-hour meter",
+    "limit_min": 120, "source": "t", "confidence": "high", "hours_known": True, "topic": "meter"}]),))
+db.execute("INSERT INTO meters VALUES('2',34.2,-118.2,'RED CURB',?)", (json.dumps([{
+    "kind": "no", "days": list(range(7)), "start": 0, "end": 1440, "label": "Red curb", "topic": "curb"}]),))
+db.commit()
+server.DB = "test.db"
+fresh = alarms.ensure_device()
+assert alarms.valid_token(fresh) and alarms.ensure_device(fresh) == fresh
+adopted = "a" * 40
+assert alarms.ensure_device(adopted) == adopted
+assert alarms.ensure_device("too-short") != "too-short"
+code, payload = server.api_autopark({"lat": 34.1, "lng": -118.3}, "", at("2026-10-23T14:00"))
+assert code == 401, payload
+code, payload = server.api_autopark({"token": "b" * 40, "lat": 34.1, "lng": -118.3}, "", at("2026-10-23T14:00"))
+assert code == 401
+code, payload = server.api_autopark({"token": fresh}, "", at("2026-10-23T14:00"))
+assert code == 400 and "lat" in payload["error"]
+pushes = []
+def grab(sub, payload):
+    pushes.append(payload)
+    return True
+code, payload = server.api_autopark(
+    {"token": fresh, "lat": 34.1016, "lng": -118.3387}, "", at("2026-10-23T14:00"), grab)
+assert code == 200, payload
+assert payload["message"] == "Parked at HOLLYWOOD BLVD, move by Fri 4:00 PM", payload
+assert payload["alarm_at"].startswith("2026-10-23T16:00")
+assert [r["minutes_before"] for r in payload["reminders"]] == [15, 5, 0]
+assert pushes == []
+linked = alarms.ensure_device(sub={"endpoint": "https://push.example/auto", "keys": {"p256dh": "k", "auth": "a"}})
+code, payload = server.api_autopark(
+    {"lat": 34.1016, "lng": -118.3387}, "Bearer " + linked, at("2026-10-23T14:00"), grab)
+assert code == 200 and pushes[-1]["title"] == "Parked", pushes
+assert pushes[-1]["body"] == "Parked at HOLLYWOOD BLVD, move by Fri 4:00 PM"
+again = len(pushes)
+code, second = server.api_autopark(
+    {"token": linked, "lat": 34.10162, "lng": -118.3387}, "", at("2026-10-23T14:01"), grab)
+assert code == 200 and second["duplicate"] is True and second["id"] == payload["id"]
+assert len(pushes) == again
+code, red = server.api_autopark(
+    {"token": fresh, "lat": 34.2, "lng": -118.2}, "", at("2026-10-23T14:00"), grab)
+assert code == 200 and red["message"] == "Parked at RED CURB, move now", red
+code, nowhere = server.api_autopark(
+    {"token": fresh, "lat": 0, "lng": 0}, "", at("2026-10-23T14:00"), grab)
+assert code == 200 and "No move-by time" in nowhere["message"]
+os.remove("test.db")
 for name in ("test-sessions.db", "test-sessions.db-wal", "test-sessions.db-shm"):
     if os.path.exists(name): os.remove(name)
 print("all tests passed")

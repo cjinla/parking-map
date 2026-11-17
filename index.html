@@ -72,6 +72,7 @@ input,select{width:100%;font:inherit;color:var(--ink);background:var(--card);bor
 .alarm{position:sticky;bottom:0;margin-top:12px;background:var(--no);color:#fff;border-radius:14px;padding:14px}
 .alarm button{background:#fff;color:var(--no);margin-top:8px}
 .small{color:var(--mute);font-size:.85rem;margin-top:16px}
+.code,input.code{font-family:ui-monospace,Menlo,monospace;font-size:.9rem;word-break:break-all}
 .checkline{display:flex;gap:8px;align-items:center}
 .checkline input{width:auto}
 </style>
@@ -99,6 +100,7 @@ input,select{width:100%;font:inherit;color:var(--ink);background:var(--card);bor
 </ol>
 <p class="hint">The beep works only while this page is open and the screen is on. A locked iPhone needs the calendar alarm or a notification.</p>
 </details>
+<button id="autosetup" class="alt" type="button">Set up auto-park</button>
 <div id="out" aria-live="polite"></div>
 </main>
 <script>
@@ -383,7 +385,7 @@ function enablePush(){
         localStorage.setItem("la-park-sub", JSON.stringify(json));
         var saved = JSON.parse(localStorage.getItem(KEY) || "null");
         return fetch("/push/subscribe", {method:"POST", headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({subscription: json, park_id: saved && saved.id})});
+          body:JSON.stringify({subscription: json, park_id: saved && saved.id, token: localStorage.getItem("la-device-token")})});
       }).then(function(){pushNote("Alerts are on. You’ll get a notice 15 minutes before, 5 minutes before, and at the deadline, when the server is awake.")});
     });
   }).catch(function(){pushNote("Couldn’t turn on alerts. Use Add to Calendar.")});
@@ -448,11 +450,98 @@ function restore(){
     });
   }).catch(function(){});
 }
+function copyText(value, button){
+  function done(){if(button){var old = button.textContent; button.textContent = "Copied"; setTimeout(function(){button.textContent = old}, 1200)}}
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(value).then(done).catch(function(){fallback()});
+  } else fallback();
+  function fallback(){
+    var el = document.createElement("textarea");
+    el.value = value; document.body.appendChild(el); el.select();
+    try { document.execCommand("copy"); done(); } catch (e) {}
+    el.remove();
+  }
+}
+function showAutoSetup(){
+  say("Getting your auto-park token. The first time can take a minute while the server wakes up…");
+  var known = localStorage.getItem("la-device-token") || "";
+  var sub = null;
+  try { sub = JSON.parse(localStorage.getItem("la-park-sub") || "null"); } catch (e) {}
+  fetch("/api/device", {method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({token: known, subscription: sub})})
+    .then(function(r){if(!r.ok) throw 0; return r.json()})
+    .then(function(d){
+      localStorage.setItem("la-device-token", d.token);
+      var h = '<section class="box"><p class="eyebrow">Auto-park</p><h2>When you leave the car</h2>';
+      h += '<p>The web app cannot see Bluetooth or CarPlay. An iPhone Shortcut runs when the car disconnects, sends this phone’s location, and the server starts the move-car alarms. No tap in this app.</p>';
+      h += '<label for="devtoken">Device token</label><input id="devtoken" class="code" readonly value="'+esc(d.token)+'">';
+      h += '<button id="copytoken" class="alt" type="button">Copy token</button>';
+      h += '<label for="devurl">Address the Shortcut calls</label><input id="devurl" class="code" readonly value="'+esc(d.autopark_url)+'">';
+      h += '<button id="copyurl" class="alt" type="button">Copy address</button>';
+      h += '<p class="hint">This token is the key for this phone. It lives in the Shortcut and on the server, not in the app’s source code. Treat it like a password.</p>';
+      h += '<h2>On the iPhone</h2><ol>';
+      h += '<li>Open the <strong>Shortcuts</strong> app.</li>';
+      h += '<li>Tap the <strong>Automation</strong> tab at the bottom.</li>';
+      h += '<li>Tap <strong>+</strong>, then <strong>Create Personal Automation</strong>. If you already see a list, tap the <strong>+</strong> in the corner.</li>';
+      h += '<li>Tap <strong>CarPlay</strong>, then <strong>Disconnects</strong>. If you do not use CarPlay: tap <strong>Bluetooth</strong>, tap <strong>Choose</strong>, pick the car, and choose <strong>Is Disconnected</strong>.</li>';
+      h += '<li>Turn off <strong>Ask Before Running</strong>. If the choice is <strong>Run Immediately</strong>, pick that. The timer should start with the phone locked.</li>';
+      h += '<li>Tap <strong>Next</strong>. Search for and add <strong>Get Current Location</strong>.</li>';
+      h += '<li>Search for and add <strong>Get Contents of URL</strong>. Tap the URL and paste the address above. Tap <strong>Show More</strong> if you need it. Set Method to <strong>POST</strong>.</li>';
+      h += '<li>Under Headers, add <strong>Content-Type</strong> with value <strong>application/json</strong>.</li>';
+      h += '<li>Request Body: <strong>JSON</strong>. Add a field named <strong>token</strong> (Text) and paste the token. Add <strong>lat</strong> (Number) and tap it, then pick <strong>Latitude</strong> from Get Current Location. Add <strong>lng</strong> (Number) and pick <strong>Longitude</strong>.</li>';
+      h += '<li>Add <strong>Get Dictionary from Input</strong>. The input is Contents of URL.</li>';
+      h += '<li>Add <strong>Get Dictionary Value</strong>. Key: <strong>message</strong>.</li>';
+      h += '<li>Add <strong>Show Notification</strong>. Title: Parked. Body: the Dictionary Value.</li>';
+      h += '<li>Tap <strong>Done</strong>.</li></ol>';
+      h += '<p>The notification says “Parked at …, move by …”. If alerts are on for the home-screen app, the server sends that same line as a push. The 15-minute, 5-minute, and deadline alarms are scheduled either way.</p>';
+      h += '<p class="hint">Apple sometimes still asks before a Bluetooth automation runs. CarPlay “Disconnects” is the trigger that can run by itself. If Ask Before Running cannot be turned off, tap the Shortcuts banner once when you park and the timer starts.</p>';
+      h += '<p class="hint">A free Render server sleeps. The Shortcut wakes it; the first call after a long idle can take a minute. If Shortcuts says it timed out, run it once more.</p>';
+      h += '<p>Backup, if you would rather open the app: the Shortcut can <strong>Open URL</strong> <span class="code">'+esc(d.open_url)+'</span>. That page uses the token saved on this phone and the GPS. It needs the screen on. The POST above works with the phone locked.</p>';
+      h += '<button id="newtoken" class="alt" type="button">New token</button>';
+      h += '<p class="hint">A new token turns off the old Shortcut until you paste the new token into it.</p></section>';
+      out.innerHTML = h;
+      document.getElementById("copytoken").addEventListener("click", function(){copyText(d.token, this)});
+      document.getElementById("copyurl").addEventListener("click", function(){copyText(d.autopark_url, this)});
+      document.getElementById("newtoken").addEventListener("click", function(){
+        fetch("/api/device", {method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({rotate: true, token: d.token, subscription: sub})})
+          .then(function(r){return r.json()}).then(function(n){
+            localStorage.setItem("la-device-token", n.token); showAutoSetup();
+          });
+      });
+    })
+    .catch(function(){say("Couldn’t reach the server. Try again in a moment.")});
+}
+function maybeAutopark(){
+  var path = location.pathname.replace(/\/$/, "") || "/";
+  var q = new URLSearchParams(location.search);
+  if (path !== "/autopark" && q.get("autopark") !== "1") return;
+  var token = localStorage.getItem("la-device-token");
+  if (!token) { say("Open Set up auto-park on this phone once, then this link can save the spot."); return; }
+  if (!navigator.geolocation) { say("This phone can’t share location from this link. Use the Shortcut’s Get Current Location instead."); return; }
+  say("Car disconnected. Saving this spot…");
+  navigator.geolocation.getCurrentPosition(function(p){
+    fetch("/api/autopark", {method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token: token, lat: p.coords.latitude, lng: p.coords.longitude})})
+      .then(function(r){if(!r.ok) throw 0; return r.json()})
+      .then(function(d){
+        var saved = {id:d.id, alarm_at:d.alarm_at, reason:d.reason, headline:d.headline || d.message, address:d.address, lat:d.lat, lng:d.lng};
+        localStorage.setItem(KEY, JSON.stringify(saved));
+        showParked(saved);
+        var banner = document.getElementById("banner");
+        if (banner) banner.innerHTML = '<div class="box">'+esc(d.message)+'</div>';
+      })
+      .catch(function(){say("Couldn’t save the spot. In Shortcuts, check the token and that lat and lng are the location variables.")});
+  }, function(){say("Location is off. Allow Location for Safari, or send the location from the Shortcut.")},
+  {enableHighAccuracy:true, timeout:15000, maximumAge:20000});
+}
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(function(){});
 go.addEventListener("click", checkGps);
 document.getElementById("addrgo").addEventListener("click", byAddress);
 document.getElementById("addr").addEventListener("keydown", function(e){if(e.key==="Enter") byAddress()});
+document.getElementById("autosetup").addEventListener("click", showAutoSetup);
 restore();
+maybeAutopark();
 </script>
 </body>
 </html>

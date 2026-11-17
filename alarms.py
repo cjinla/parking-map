@@ -4,7 +4,7 @@ Sessions live in sessions.db, separate from the city data file, so a data reload
 does not erase them. On Render's free plan the disk is ephemeral and the process
 sleeps, so push is best-effort. The .ics alarms do not depend on this process.
 """
-import json, os, sqlite3, threading, time, uuid
+import json, os, re, secrets, sqlite3, threading, time, uuid
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -12,6 +12,8 @@ SESSION_DB = os.environ.get("SESSION_DB", "sessions.db")
 TZ = ZoneInfo("America/Los_Angeles")
 LOCK = threading.Lock()
 REMINDERS = ((15, "15"), (5, "5"), (0, "now"))
+# Device tokens are created on the phone and stored only in sessions.db. Never commit one.
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 
 
 def connect():
@@ -21,11 +23,21 @@ def connect():
         id TEXT PRIMARY KEY, endpoint TEXT UNIQUE, p256dh TEXT, auth TEXT, created TEXT);
       CREATE TABLE IF NOT EXISTS parks (
         id TEXT PRIMARY KEY, lat REAL, lng REAL, address TEXT, move_by TEXT,
-        reason TEXT, headline TEXT, sub_id TEXT, created TEXT, cancelled INTEGER DEFAULT 0);
+        reason TEXT, headline TEXT, sub_id TEXT, created TEXT, cancelled INTEGER DEFAULT 0,
+        device_token TEXT);
       CREATE TABLE IF NOT EXISTS reminders (
         id INTEGER PRIMARY KEY AUTOINCREMENT, park_id TEXT, fire_at TEXT, kind TEXT, sent INTEGER DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS devices (
+        token TEXT PRIMARY KEY, sub_id TEXT, created TEXT);
     """)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(parks)")}
+    if "device_token" not in cols:
+        conn.execute("ALTER TABLE parks ADD COLUMN device_token TEXT")
     return conn
+
+
+def valid_token(token):
+    return bool(TOKEN_RE.match(token or ""))
 
 
 def reminder_times(move_by, now):
@@ -59,21 +71,95 @@ def upsert_sub(sub):
     return sid
 
 
-def save_park(lat, lng, address, move_by, reason, headline, sub_id, now):
+def save_park(lat, lng, address, move_by, reason, headline, sub_id, now, device_token=None):
     """move_by is an aware datetime or None. Reminders are skipped when there is no deadline."""
     pid = uuid.uuid4().hex
     fires = reminder_times(move_by, now) if move_by else []
     with LOCK:
         conn = connect()
-        conn.execute("INSERT INTO parks VALUES(?,?,?,?,?,?,?,?,?,0)", (
+        conn.execute("""INSERT INTO parks
+            (id, lat, lng, address, move_by, reason, headline, sub_id, created, cancelled, device_token)
+            VALUES (?,?,?,?,?,?,?,?,?,0,?)""", (
             pid, lat, lng, address or "", move_by.isoformat() if move_by else None,
-            reason or "", headline or "", sub_id, now.isoformat()))
+            reason or "", headline or "", sub_id, now.isoformat(), device_token))
         for item in fires:
             conn.execute("INSERT INTO reminders(park_id, fire_at, kind, sent) VALUES(?,?,?,0)",
                          (pid, item["at"].isoformat(), item["kind"]))
         conn.commit()
     return {"id": pid, "alarm_at": move_by.isoformat() if move_by else None,
             "reminders": [{"at": i["at"].isoformat(), "kind": i["kind"], "minutes_before": i["minutes_before"]} for i in fires]}
+
+
+def ensure_device(token=None, sub=None):
+    """Return this phone's token, creating it if needed. A token the phone already
+    holds is stored again after a server restart so the Shortcut keeps working."""
+    sub_id = upsert_sub(sub) if sub else None
+    with LOCK:
+        conn = connect()
+        if valid_token(token):
+            row = conn.execute("SELECT token, sub_id FROM devices WHERE token=?", (token,)).fetchone()
+            if row:
+                if sub_id and sub_id != row[1]:
+                    conn.execute("UPDATE devices SET sub_id=? WHERE token=?", (sub_id, token))
+                    conn.commit()
+                return token
+            conn.execute("INSERT INTO devices VALUES(?,?,?)", (token, sub_id, datetime.now(TZ).isoformat()))
+            conn.commit()
+            return token
+        fresh = secrets.token_urlsafe(32)
+        conn.execute("INSERT INTO devices VALUES(?,?,?)", (fresh, sub_id, datetime.now(TZ).isoformat()))
+        conn.commit()
+        return fresh
+
+
+def rotate_device(old, sub=None):
+    fresh = secrets.token_urlsafe(32)
+    sub_id = upsert_sub(sub) if sub else None
+    with LOCK:
+        conn = connect()
+        if valid_token(old):
+            prev = conn.execute("SELECT sub_id FROM devices WHERE token=?", (old,)).fetchone()
+            if prev and not sub_id:
+                sub_id = prev[0]
+            conn.execute("DELETE FROM devices WHERE token=?", (old,))
+        conn.execute("INSERT INTO devices VALUES(?,?,?)", (fresh, sub_id, datetime.now(TZ).isoformat()))
+        conn.commit()
+    return fresh
+
+
+def get_device(token):
+    if not valid_token(token):
+        return None
+    conn = connect()
+    row = conn.execute("""
+        SELECT devices.token, devices.sub_id, subs.endpoint, subs.p256dh, subs.auth
+        FROM devices LEFT JOIN subs ON subs.id = devices.sub_id WHERE devices.token=?""", (token,)).fetchone()
+    if not row:
+        return None
+    return {"token": row[0], "sub_id": row[1], "endpoint": row[2], "p256dh": row[3], "auth": row[4]}
+
+
+def latest_device_park(token):
+    if not valid_token(token):
+        return None
+    conn = connect()
+    row = conn.execute("""
+        SELECT id, lat, lng, address, move_by, reason, headline, cancelled, created
+        FROM parks WHERE device_token=? AND cancelled=0 ORDER BY created DESC LIMIT 1""", (token,)).fetchone()
+    if not row:
+        return None
+    keys = ("id", "lat", "lng", "address", "move_by", "reason", "headline", "cancelled", "created")
+    return dict(zip(keys, row))
+
+
+def push_to_sub(sub, payload, sender=None):
+    """sub is {endpoint, p256dh, auth}. sender overrides Web Push in tests."""
+    if not sub or not sub.get("endpoint"):
+        return False
+    sender = sender or send_web_push
+    if sender is send_web_push and not push_configured():
+        return False
+    return bool(sender(sub, payload))
 
 
 def attach_sub(park_id, sub):

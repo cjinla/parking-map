@@ -11,14 +11,14 @@ POST /push/subscribe  {"subscription","park_id"}
 Run:  python server.py   (port from $PORT, default 8080)
 """
 import json, math, os, re, sqlite3, threading, urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlencode, urlparse, parse_qs
 from zoneinfo import ZoneInfo
 
 import alarms
 from ingest import DB as DATA_DB
-from rules import Rule, WEEKDAYS, answer, apply_sign, parse_days, rule_from_json, to_dict
+from rules import Rule, WEEKDAYS, answer, apply_sign, clock_label, parse_days, rule_from_json, to_dict
 
 DB = os.environ.get("PARKING_DB", DATA_DB)
 TZ = ZoneInfo("America/Los_Angeles")
@@ -252,14 +252,67 @@ def _alarm_at(result, now):
         return datetime.fromisoformat(result["move_by"])
     return None
 
-def park(lat, lng, now, sign=None, has_permit=False, radius=40, sub_id=None, searched=None):
+def park(lat, lng, now, sign=None, has_permit=False, radius=40, sub_id=None, searched=None, device_token=None):
     result = assemble(lat, lng, now, sign, has_permit, radius, searched)
     when = _alarm_at(result, now)
     saved = alarms.save_park(lat, lng, result.get("address") or result.get("segment"), when,
-                             result.get("reason"), result.get("headline"), sub_id, now)
+                             result.get("reason"), result.get("headline"), sub_id, now, device_token)
     result.update(saved)
     result["alarm_at"] = saved["alarm_at"]
     return result
+
+def parked_message(place, when, now):
+    """Confirmation line: 'Parked at X, move by Y'."""
+    place = place or "this curb"
+    if when is None:
+        return f"Parked at {place}. No move-by time is in the city data."
+    if when <= now + timedelta(minutes=1):
+        return f"Parked at {place}, move now"
+    return f"Parked at {place}, move by {clock_label(when)}"
+
+def autopark(lat, lng, token, now, sender=None):
+    """Save the spot from a Shortcut and send 'Parked at X, move by Y'."""
+    device = alarms.get_device(token)
+    if not device:
+        raise PermissionError("unknown token")
+    prev = alarms.latest_device_park(token)
+    if prev and prev.get("created") and prev.get("lat") is not None:
+        created = datetime.fromisoformat(prev["created"])
+        if now - created <= timedelta(minutes=3) and dist(lat, lng, prev["lat"], prev["lng"]) <= 80:
+            when = datetime.fromisoformat(prev["move_by"]) if prev.get("move_by") else None
+            return {"ok": True, "duplicate": True, "id": prev["id"], "alarm_at": prev.get("move_by"),
+                    "address": prev.get("address"), "reason": prev.get("reason"), "headline": prev.get("headline"),
+                    "lat": prev["lat"], "lng": prev["lng"], "reminders": [],
+                    "message": parked_message(prev.get("address"), when, now), "push_sent": False}
+    result = park(lat, lng, now, sub_id=device.get("sub_id"), device_token=token)
+    when = datetime.fromisoformat(result["alarm_at"]) if result.get("alarm_at") else None
+    place = result.get("address") or result.get("segment")
+    message = parked_message(place, when, now)
+    payload = {"title": "Parked", "body": message, "tag": "autopark-" + result["id"], "url": "/?park=" + result["id"]}
+    sent = alarms.push_to_sub(
+        {"endpoint": device.get("endpoint"), "p256dh": device.get("p256dh"), "auth": device.get("auth")},
+        payload, sender)
+    return {"ok": True, "duplicate": False, "id": result["id"], "alarm_at": result.get("alarm_at"),
+            "address": place, "reason": result.get("reason"), "headline": result.get("headline"),
+            "lat": lat, "lng": lng, "reminders": result.get("reminders") or [],
+            "message": message, "push_sent": bool(sent), "move_by_text": result.get("move_by_text")}
+
+def api_autopark(body, authorization, now, sender=None):
+    """HTTP contract for POST /api/autopark. Returns (status, json)."""
+    bearer = ""
+    if authorization and authorization.lower().startswith("bearer "):
+        bearer = authorization.split(None, 1)[1].strip()
+    body_token = str((body or {}).get("token") or "").strip()
+    token = bearer if alarms.get_device(bearer) else body_token if alarms.get_device(body_token) else ""
+    if not token:
+        return 401, {"error": "Send a device token from Set up auto-park."}
+    try:
+        lat, lng = float(body["lat"]), float(body["lng"])
+    except (KeyError, TypeError, ValueError):
+        return 400, {"error": "Send lat and lng"}
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return 400, {"error": "lat or lng is out of range"}
+    return 200, autopark(lat, lng, token, now, sender)
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -272,12 +325,16 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
-        path = u.path
+        path = u.path.rstrip("/") or "/"
         if path in FILES:
             rel, ctype = FILES[path]
             return self.send_file(rel, ctype, "no-cache" if rel.endswith((".html", ".js", ".webmanifest")) else "public, max-age=86400")
+        if path in ("/autopark",):
+            return self.send_file("index.html", "text/html; charset=utf-8", "no-cache")
         if path == "/push/public-key":
             return self.reply(200, {"publicKey": os.environ.get("VAPID_PUBLIC_KEY", ""), "configured": alarms.push_configured()})
+        if path == "/api/device/latest":
+            return self.latest_park()
         ics = re.fullmatch(r"/park/([a-f0-9]{32})\.ics", path)
         if ics:
             return self.calendar(ics.group(1))
@@ -310,6 +367,11 @@ class H(BaseHTTPRequestHandler):
             return self.check_body(body)
         if path == "/park":
             return self.park_body(body)
+        if path == "/api/autopark":
+            code, payload = api_autopark(body, self.headers.get("Authorization"), self.when(body.get("at")))
+            return self.reply(code, payload)
+        if path == "/api/device":
+            return self.device_http(body)
         if path == "/push/subscribe":
             return self.subscribe(body)
         cancel = re.fullmatch(r"/park/([a-f0-9]{32})/cancel", path)
@@ -372,13 +434,42 @@ class H(BaseHTTPRequestHandler):
 
     def subscribe(self, body):
         try:
-            alarms.upsert_sub(body.get("subscription") or body)
+            sub = body.get("subscription") or body
+            alarms.upsert_sub(sub)
             attached = False
             if body.get("park_id"):
-                attached = alarms.attach_sub(body["park_id"], body.get("subscription") or body)
+                attached = alarms.attach_sub(body["park_id"], sub)
+            if body.get("token"):
+                alarms.ensure_device(body["token"], sub)
         except ValueError as e:
             return self.reply(400, {"error": str(e)})
         self.reply(200, {"ok": True, "attached": attached, "configured": alarms.push_configured()})
+
+    def device_http(self, body):
+        sub = body.get("subscription")
+        try:
+            if body.get("rotate"):
+                token = alarms.rotate_device(str(body.get("token") or ""), sub)
+            else:
+                token = alarms.ensure_device(str(body.get("token") or "") or None, sub)
+        except ValueError as e:
+            return self.reply(400, {"error": str(e)})
+        base = self.public_base()
+        self.reply(200, {"token": token, "autopark_url": base + "/api/autopark", "open_url": base + "/autopark",
+                         "push_configured": alarms.push_configured()})
+
+    def latest_park(self):
+        auth = self.headers.get("Authorization") or ""
+        token = auth.split(None, 1)[1].strip() if auth.lower().startswith("bearer ") else ""
+        row = alarms.latest_device_park(token)
+        if not row:
+            return self.reply(404, {"error": "No parked session for that token."})
+        self.reply(200, row)
+
+    def public_base(self):
+        proto = self.headers.get("X-Forwarded-Proto") or "http"
+        host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "localhost"
+        return proto + "://" + host
 
     def calendar(self, park_id):
         row = alarms.get_park(park_id)
