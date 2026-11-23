@@ -21,20 +21,33 @@ def text_pay_url(zone):
     return "sms:" + TEXT_PAY_NUMBER + "&body=" + zone
 
 
-def payment_options(space_id=None, zone=None):
+PARKMOBILE_SEARCH = "https://app.parkmobile.io/search/"
+SPOTHERO = "https://spothero.com/"
+PAYMENT_NEEDS = (
+    "This app does not charge a card. A real payment would need a merchant account, "
+    "a ParkMobile or LADOT partner API, and a map from the city's space id to the pay-by-phone zone. "
+    "None of those are connected. No API key is stored here."
+)
+
+
+def payment_options(space_id=None, zone=None, lat=None, lng=None):
     links = [
-        {"name": "LADOT: Park Smarter and ParkMobile", "url": METER_PAY},
-        {"name": "ParkMobile in Los Angeles", "url": PARKMOBILE_LA},
+        {"name": "ParkMobile search", "url": PARKMOBILE_SEARCH, "kind": "meter"},
+        {"name": "LADOT: Park Smarter and ParkMobile", "url": METER_PAY, "kind": "meter"},
+        {"name": "ParkMobile in Los Angeles", "url": PARKMOBILE_LA, "kind": "meter"},
+        {"name": "SpotHero lots and garages", "url": SPOTHERO, "kind": "lot"},
     ]
     sms = text_pay_url(zone)
     if sms:
         links.insert(0, {"name": "Text zone " + "".join(ch for ch in str(zone) if ch.isdigit()) + " to " + TEXT_PAY_NUMBER,
-                         "url": sms})
+                         "url": sms, "kind": "meter"})
     return {
         "space_id": space_id,
         "zone": "".join(ch for ch in str(zone) if ch.isdigit()) if zone else None,
+        "lat": lat, "lng": lng,
         "links": links,
-        "note": "The city meter list has a space id, not the pay-by-phone zone. Read the zone on the meter sticker or screen.",
+        "note": "The city meter list has a space id, not the pay-by-phone zone. The text is prefilled when you type the zone from the sticker. SpotHero is for lots and garages, not the curb meter.",
+        "integration": PAYMENT_NEEDS,
     }
 
 

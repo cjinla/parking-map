@@ -137,7 +137,8 @@ def plan_alerts(move_by, now, reason="", settings=None):
     for minutes in s["lead_minutes"]:
         fire = move_by - timedelta(minutes=minutes)
         if fire >= now - timedelta(seconds=5):
-            out.append({"at": fire, "kind": str(minutes), "minutes_before": minutes, "level": "soon"})
+            level = "loud" if family == "sweep" and minutes == 5 else "soon"
+            out.append({"at": fire, "kind": str(minutes), "minutes_before": minutes, "level": level})
     if move_by >= now - timedelta(seconds=5):
         out.append({"at": move_by, "kind": "now", "minutes_before": 0, "level": "final"})
     out.sort(key=lambda item: item["at"])
@@ -482,6 +483,14 @@ def alert_content(kind, address, reason, pid):
     place = address or "your spot"
     why = reason or "Time to move the car."
     urgent = kind in ("now", "repeat")
+    loud_sweep = str(kind) == "5" and restriction_family(reason) == "sweep"
+    if loud_sweep:
+        title, body = "Street sweeping in 5 minutes", f"Move before the sweeper. {place}. {why}"
+        return {
+            "title": title, "body": body, "tag": f"park-{pid}-sweep5-{int(time.time())}",
+            "url": "/?park=" + pid, "level": "loud", "requireInteraction": True, "urgent": True,
+            "renotify": True, "vibrate": [600, 200, 600, 200, 800],
+        }
     if kind == "night":
         title, body = "Tomorrow: move the car", f"{why} {place}."
     elif kind == "morning":

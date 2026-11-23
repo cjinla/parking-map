@@ -79,6 +79,10 @@ input,select{width:100%;font:inherit;color:var(--ink);background:var(--card);bor
 .spots{list-style:none;padding:0;margin:8px 0 0}
 .spots li{padding:8px 0;border-top:1px solid var(--line)}
 .spots a{font-weight:700}
+.wheel{display:flex;gap:8px;margin-top:8px}
+.wheel div{flex:1;height:132px;overflow-y:auto;scroll-snap-type:y mandatory;background:var(--card);border:1.5px solid var(--line);border-radius:12px}
+.wheel button{min-height:44px;padding:8px;scroll-snap-align:center;background:transparent;color:var(--ink);border:0;border-radius:0}
+.ask{margin-top:12px}
 .code,input.code{font-family:ui-monospace,Menlo,monospace;font-size:.9rem;word-break:break-all}
 .checkline{display:flex;gap:8px;align-items:center}
 .checkline input{width:auto}
@@ -107,6 +111,7 @@ input,select{width:100%;font:inherit;color:var(--ink);background:var(--card);bor
 </ol>
 <p class="hint">The beep works only while this page is open and the screen is on. A locked iPhone needs the calendar alarm or a notification.</p>
 </details>
+<button id="watchpark" class="alt" type="button">Watch for when I park</button>
 <button id="autosetup" class="alt" type="button">Set up auto-park</button>
 <button id="alertsettings" class="alt" type="button">Alert times</button>
 <button id="permits" class="alt" type="button">My permit districts</button>
@@ -156,20 +161,26 @@ function settingsPayload(s){
   return {lead_minutes:[+s.lead1, +s.lead2], repeat_minutes:+s.repeat, repeat_for_minutes:+s.repeatFor,
     night_hour:+s.nightHour, morning_hour:+s.morningHour, early_before_hour:+s.earlyBefore, snooze_minutes:+s.snooze};
 }
-function beep(urgent){
+function beep(urgent, sweep){
   if (Date.now() - lastBeep < 4000) return;
   lastBeep = Date.now();
   unlock();
   if (!audioCtx) return;
   function tone(freq, at, dur, gain){
     var o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.type = urgent ? "sawtooth" : "sine";
+    o.type = (urgent || sweep) ? "sawtooth" : "sine";
     o.frequency.value = freq; o.connect(g); g.connect(audioCtx.destination);
     var t = audioCtx.currentTime + at;
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(gain, t + 0.02);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.start(t); o.stop(t + dur + 0.02);
+  }
+  if (sweep) {
+    tone(440, 0, 0.35, 0.7); tone(660, 0.28, 0.35, 0.7); tone(880, 0.56, 0.4, 0.75);
+    tone(660, 0.9, 0.35, 0.7); tone(880, 1.2, 0.5, 0.75);
+    if (navigator.vibrate) navigator.vibrate([600, 150, 600, 150, 800]);
+    return;
   }
   if (urgent) {
     tone(520, 0, 0.28, 0.55); tone(780, 0.3, 0.28, 0.55); tone(520, 0.6, 0.28, 0.55);
@@ -251,6 +262,15 @@ function show(d, gpsNote){
     } else {
       h += '<button id="park" type="button">I parked here</button>';
     }
+    h += sidePicker(d);
+    if (d.block && d.block.length) {
+      h += '<h2>This block</h2><ul class="spots">';
+      d.block.forEach(function(s){
+        var lim = s.time_limit_min ? (s.time_limit_min >= 60 ? (s.time_limit_min/60)+" hr" : s.time_limit_min+" min") : "limit not listed";
+        h += '<li><b>'+esc(s.space_id || "Space")+'</b> · '+esc(s.distance_m)+' m · '+esc(lim)+(s.rate ? " · "+esc(s.rate) : "")+'</li>';
+      });
+      h += '</ul>';
+    }
     h += '<button id="nearby" class="alt" type="button">Find a legal spot nearby</button>';
     h += '<div id="nearbybox"></div>';
   }
@@ -308,6 +328,13 @@ function show(d, gpsNote){
   if (have) have.addEventListener("click", function(){savePermitName(spot.permit_district); recheck(true)});
   var nearby = document.getElementById("nearby");
   if (nearby) nearby.addEventListener("click", findNearby);
+  document.querySelectorAll("[data-side]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var side = btn.getAttribute("data-side") || "";
+      if (side) localStorage.setItem("la-curb-side", side); else localStorage.removeItem("la-curb-side");
+      recheck(false);
+    });
+  });
   [["rep-temp","temp_no_parking"],["rep-meter","broken_meter"],["rep-tow","enforcement"]].forEach(function(pair){
     var btn = document.getElementById(pair[0]);
     if (btn) btn.addEventListener("click", function(){sendReport(pair[1])});
@@ -436,7 +463,7 @@ function signForm(d){
 function payload(hasPermit){
   var sign = null;
   try { sign = readSign(); } catch (e) { window.alert(e.message); return null; }
-  var body = {lat: spot.lat, lng: spot.lng, sign: sign, has_permit: !!hasPermit, permits: savedPermits()};
+  var body = {lat: spot.lat, lng: spot.lng, sign: sign, has_permit: !!hasPermit, permits: savedPermits(), side: savedSide()};
   if (spot.searched) body.address = document.getElementById("addr").value.trim();
   return body;
 }
@@ -491,7 +518,8 @@ function showParked(saved){
   if (saved.meter) {
     h += '<label for="zone">Zone number on the meter sticker</label><input id="zone" inputmode="numeric" placeholder="17126">';
     h += '<button id="payopen" type="button">Pay the meter</button><div id="paylinks"></div>';
-    h += '<label for="paiduntil">Paid until</label><input id="paiduntil" type="datetime-local">';
+    h += '<p class="hint">Add meter time. The wheels are hours and minutes from now.</p>';
+    h += '<div class="wheel" id="wheel"><div id="wheelh"></div><div id="wheelm"></div></div>';
     h += '<button id="paidgo" class="alt" type="button">Update the alarm</button>';
     h += '<p class="hint">A sweeping or tow-away deadline that is sooner than the payment stays in place.</p>';
   }
@@ -506,6 +534,7 @@ function showParked(saved){
   out.innerHTML = h;
   var ics = document.getElementById("ics");
   if (ics) ics.addEventListener("click", unlock);
+  fillWheel();
   var payopen = document.getElementById("payopen");
   if (payopen) payopen.addEventListener("click", function(){openPay(saved)});
   var paidgo = document.getElementById("paidgo");
@@ -518,12 +547,13 @@ function showParked(saved){
   if (!when) return;
   function fire(kind, level){
     var urgent = level === "final" || kind === "now" || kind === "repeat";
+    var sweep = level === "loud" || (kind === "5" && /sweep/i.test(saved.reason || ""));
     var banner = document.getElementById("banner");
     var text = urgent ? "Move the car now." : (kind === "night" ? "Move the car tomorrow." : kind === "morning" ? "Move the car this morning." : "Move the car in "+kind+" minutes.");
     if (banner) banner.innerHTML = '<div class="alarm" role="alert"><strong>'+esc(text)+'</strong><p>'+esc(saved.reason || "")+'</p></div>';
     var silence = document.getElementById("silence");
     if (silence) silence.hidden = false;
-    beep(urgent);
+    beep(urgent, sweep);
     if (urgent) startNag(saved);
   }
   function tick(){
@@ -553,7 +583,7 @@ function showParked(saved){
 function startNag(saved){
   if (nag || !saved.alarm_at) return;
   var prefs = loadSettings();
-  var until = new Date(saved.alarm_at).getTime() + prefs.repeatFor * 60000;
+  var until = new Date(saved.alarm_at).getTime() + 120 * 60000;
   nag = setInterval(function(){
     if (Date.now() > until) { clearInterval(nag); nag = null; return; }
     beep(true);
@@ -778,7 +808,7 @@ function showAlertSettings(){
   h += '<label for="repeatFor">Keep repeating after the deadline</label><select id="repeatFor">'+opts([5,15,30,60], s.repeatFor)+'</select><p class="hint">Minutes. Then the repeats stop even if you have not answered.</p>';
   h += '<label for="nightHour">Night before sweeping or tow-away</label><select id="nightHour">'+opts([18,19,20,21], s.nightHour)+'</select><p class="hint">Hour, 24-hour clock. 20 is 8 PM.</p>';
   h += '<label for="morningHour">Morning alert if it starts before 10 AM</label><select id="morningHour">'+opts([6,7,8], s.morningHour)+'</select>';
-  h += '<p class="hint">iPhone lock-screen alerts use the system sound. At the deadline the push is marked high priority and asks to stay on screen where the phone allows it. A louder beep plays while this page is open. iOS does not let a website choose the notification sound.</p>';
+  h += '<p class="hint">Street sweeping plays a louder alert 5 minutes before, and a siren while this page is open. Repeats keep going until you tap I moved it. On the lock screen they stop after the minutes below. While this page is open they can continue for up to 2 hours. iOS does not let a website choose the lock-screen sound.</p>';
   h += '<button id="savesettings" type="button">Save alert times</button></section>';
   out.innerHTML = h;
   document.getElementById("savesettings").addEventListener("click", function(){
@@ -805,10 +835,23 @@ function savePermitName(name){
   if (list.indexOf(name) < 0) list.push(name);
   localStorage.setItem("la-permits", JSON.stringify(list));
 }
+function savedSide(){ return localStorage.getItem("la-curb-side") || ""; }
 function withPermits(url){
   var list = savedPermits();
-  if (!list.length) return url;
-  return url + (url.indexOf("?") >= 0 ? "&" : "?") + "permits=" + encodeURIComponent(list.join("|"));
+  if (list.length) url += (url.indexOf("?") >= 0 ? "&" : "?") + "permits=" + encodeURIComponent(list.join("|"));
+  var side = savedSide();
+  if (side) url += (url.indexOf("?") >= 0 ? "&" : "?") + "side=" + encodeURIComponent(side);
+  return url;
+}
+function sidePicker(d){
+  var current = savedSide();
+  var hint = d.address_side ? "The nearest block face starts with an " + d.address_side + " number. That is one side of the street, not both." : "The city map usually does not say which curb is swept.";
+  var h = '<div class="box"><p><b>Which side did you park on?</b></p><p class="hint">'+esc(hint)+' Odd and even come from the address. Left and right are from the driver’s seat, facing the direction you parked.</p><div class="chips">';
+  ["odd","even","left","right"].forEach(function(name){
+    h += '<button type="button" class="alt" data-side="'+name+'">'+(current===name?"✓ ":"")+name+'</button>';
+  });
+  h += '<button type="button" class="alt" data-side="">Not sure</button></div></div>';
+  return h;
 }
 function reportLabel(kind){
   return {temp_no_parking:"Temporary no-parking", broken_meter:"Broken meter", enforcement:"Enforcement or tow truck"}[kind] || kind;
@@ -868,13 +911,39 @@ function openPay(saved){
   fetch("/pay?"+q).then(function(r){return r.json()}).then(function(d){
     var box = document.getElementById("paylinks");
     if (!box) return;
-    box.innerHTML = (d.links || []).map(function(l){return '<a class="btn" href="'+esc(l.url)+'">'+esc(l.name)+'</a>'}).join("") + '<p class="hint">'+esc(d.note || "")+'</p>';
+    box.innerHTML = (d.links || []).map(function(l){return '<a class="btn" href="'+esc(l.url)+'">'+esc(l.name)+'</a>'}).join("") + '<p class="hint">'+esc(d.note || "")+'</p><p class="hint">'+esc(d.integration || "")+'</p>';
   });
 }
+function fillWheel(){
+  function col(id, values, picked){
+    var box = document.getElementById(id);
+    if (!box) return;
+    box.innerHTML = values.map(function(n){
+      return '<button type="button" data-n="'+n+'"'+(n===picked?' aria-current="true"':'')+'>'+n+'</button>';
+    }).join("");
+    box.querySelectorAll("button").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        box.querySelectorAll("button").forEach(function(b){ b.removeAttribute("aria-current"); });
+        btn.setAttribute("aria-current", "true");
+      });
+    });
+  }
+  col("wheelh", [0,1,2,3,4,5,6,7,8], 1);
+  col("wheelm", [0,15,30,45], 0);
+}
+function wheelAmount(){
+  function read(id){
+    var on = document.querySelector("#"+id+" [aria-current]");
+    return on ? +on.getAttribute("data-n") : 0;
+  }
+  return read("wheelh") * 60 + read("wheelm");
+}
 function updatePaid(saved){
-  var input = document.getElementById("paiduntil");
-  if (!input || !input.value) { window.alert("Set the time the meter is paid until."); return; }
-  fetch("/park/"+saved.id+"/paid", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({paid_until: input.value})})
+  var minutes = wheelAmount();
+  if (!minutes) { window.alert("Pick how much time you added on the meter."); return; }
+  var until = new Date(Date.now() + minutes * 60000);
+  var stamp = until.getFullYear()+"-"+String(until.getMonth()+1).padStart(2,"0")+"-"+String(until.getDate()).padStart(2,"0")+"T"+String(until.getHours()).padStart(2,"0")+":"+String(until.getMinutes()).padStart(2,"0");
+  fetch("/park/"+saved.id+"/paid", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({paid_until: stamp})})
     .then(function(r){return r.json().then(function(d){return {ok:r.ok, d:d}})})
     .then(function(res){
       if (!res.ok || !res.d.alarm_at) { window.alert(res.d.error || "Couldn’t update the alarm."); return; }
@@ -922,6 +991,44 @@ function showTicketHelp(){
     out.innerHTML = h;
   }).catch(function(){say("Couldn’t load the links.")});
 }
+var parkSamples = [];
+var parkWatch = null;
+var parkAskedAt = 0;
+function startParkWatch(){
+  if (!navigator.geolocation) { say("This iPhone can’t share location from the page. Use Set up auto-park for a Shortcut instead."); return; }
+  if (parkWatch != null) { say("Already watching. Keep this page open. A locked iPhone will not keep watching."); return; }
+  say("Watching speed and movement. Keep this page open until you stop. Then you’ll get Did you just park here?");
+  parkWatch = navigator.geolocation.watchPosition(function(p){
+    parkSamples.push({t: Date.now()/1000, lat: p.coords.latitude, lng: p.coords.longitude, speed: p.coords.speed});
+    if (parkSamples.length > 40) parkSamples = parkSamples.slice(-40);
+    if (Date.now() - parkAskedAt < 10*60*1000) return;
+    fetch("/api/park-detect", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({samples: parkSamples})})
+      .then(function(r){return r.json()}).then(function(d){
+        if (!d.prompt) return;
+        parkAskedAt = Date.now();
+        var last = parkSamples[parkSamples.length-1];
+        askParked(last.lat, last.lng);
+      }).catch(function(){});
+  }, function(){ say("Location is off. Allow Location for Safari, or use the Shortcut in Set up auto-park."); }, {enableHighAccuracy:true, maximumAge:2000});
+  try {
+    if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === "function") {
+      DeviceMotionEvent.requestPermission().then(function(){}, function(){});
+    }
+  } catch (e) {}
+}
+function askParked(lat, lng){
+  var box = document.createElement("div");
+  box.className = "alarm ask";
+  box.innerHTML = '<strong>Did you just park here?</strong><p>This guess uses your speed dropping, or almost no movement after driving. It is not CarPlay or Bluetooth. Those are not available to a website.</p><button id="yespark" type="button">Yes — check this spot</button><button id="nopark" class="alt" type="button">Not now</button>';
+  out.prepend(box);
+  document.getElementById("yespark").addEventListener("click", function(){
+    box.remove();
+    fetch(withPermits("/check?lat="+encodeURIComponent(lat)+"&lng="+encodeURIComponent(lng)))
+      .then(function(r){return r.json()}).then(function(d){ d.lat = lat; d.lng = lng; show(d); });
+  });
+  document.getElementById("nopark").addEventListener("click", function(){ box.remove(); });
+}
+document.getElementById("watchpark").addEventListener("click", function(){ unlock(); startParkWatch(); });
 document.getElementById("autosetup").addEventListener("click", showAutoSetup);
 document.getElementById("permits").addEventListener("click", showPermits);
 document.getElementById("holidays").addEventListener("click", showHolidays);
@@ -930,7 +1037,7 @@ ensureToken().catch(function(){});
 document.getElementById("alertsettings").addEventListener("click", showAlertSettings);
 if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", function(e){
   if (!e.data || e.data.type !== "alarm") return;
-  beep(e.data.level === "final");
+  beep(e.data.level === "final" || e.data.level === "loud", e.data.level === "loud");
 });
 restore();
 maybeAutopark();

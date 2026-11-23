@@ -44,6 +44,7 @@ class Rule:
     rate: str = ""
     rate_type: str = ""       # FLAT | TOD | JUMP | ""
     topic: str = ""           # meter | sweep | tow | permit | curb | ""
+    side: str = ""            # "" | odd | even | left | right
 
 
 def nth_weekday(year, month, weekday, n):
@@ -127,6 +128,39 @@ def holiday_calendar(year):
                         "meters_off": bool(meters), "sweeping_off": bool(sweep)})
         d += timedelta(days=1)
     return out
+
+
+def address_side(address):
+    """Odd or even from a leading house number, or "" when the text has none."""
+    m = re.match(r"\s*(\d+)", str(address or ""))
+    if not m:
+        return ""
+    return "odd" if int(m.group(1)) % 2 else "even"
+
+
+def apply_curb_side(rules, choice):
+    """Drop sweeping rules for the other side. Unknown sides stay, with a note."""
+    want = (choice or "").strip().lower()
+    if want not in ("odd", "even", "left", "right"):
+        return rules, ""
+    kept, dropped, unspecified = [], 0, False
+    for r in rules:
+        have = (getattr(r, "side", "") or "").lower()
+        if rule_topic(r) != "sweep" or not have:
+            if rule_topic(r) == "sweep":
+                unspecified = True
+            kept.append(r)
+            continue
+        same_axis = {have, want} <= {"odd", "even"} or {have, want} <= {"left", "right"}
+        if have == want or not same_axis:
+            kept.append(r)
+        else:
+            dropped += 1
+    if dropped:
+        return kept, "Using the " + want + " side. " + str(dropped) + " sweeping window(s) for the other side were set aside. Check the sign."
+    if unspecified:
+        return kept, "The city map does not name a curb side here. Your " + want + " side choice is saved. Check the sign."
+    return kept, ""
 
 
 def permit_covers(district, saved):

@@ -18,10 +18,11 @@ from zoneinfo import ZoneInfo
 
 import alarms
 import citylinks
+import parkdetect
 import signread
 from ingest import DB as DATA_DB
-from rules import (Rule, WEEKDAYS, answer, apply_sign, clock_label, holiday_calendar,
-                   parse_days, permit_covers, rule_from_json, to_dict)
+from rules import (Rule, WEEKDAYS, address_side, answer, apply_curb_side, apply_sign, clock_label,
+                   holiday_calendar, parse_days, permit_covers, rule_from_json, to_dict)
 from signparse import sign_conflicts
 
 DB = os.environ.get("PARKING_DB", DATA_DB)
@@ -105,6 +106,13 @@ def clock_span(text):
         return int(h[0][0]) * 60 + int(h[0][1]), int(h[1][0]) * 60 + int(h[1][1])
     return None
 
+def _sweep_side(props):
+    raw = str(props.get("Odd_Even") or props.get("odd_even") or props.get("side") or "").strip().lower()
+    if raw in ("odd", "even", "left", "right"):
+        return raw
+    return ""
+
+
 def sweep_from_props(props):
     """Return (rules, warning). Hours are attached only when the data actually has them."""
     posted_time = props.get("Posted_Time") or props.get("posted_time") or ""
@@ -122,7 +130,7 @@ def sweep_from_props(props):
             warn += " Check the sign."
             return [Rule("no", days, span[0], span[1], label,
                          source="Posted street sweeping areas", confidence="low", skip_holidays=True,
-                         also_sweep_holidays=True, topic="sweep")], warn
+                         also_sweep_holidays=True, topic="sweep", side=_sweep_side(props))], warn
     posted = props.get("posted_times") or []
     if posted:
         rules = []
@@ -248,7 +256,33 @@ def lookup(lat, lng, now, radius=40):
     s = find_spot(lat, lng, radius)
     return s["rules"], s["address"], s["confidence"], s["warnings"]
 
-def assemble(lat, lng, now, sign=None, has_permit=False, radius=40, searched=None, permits=None):
+def block_spaces(address, lat, lng, limit=8):
+    """Other meters on the same block face, so the screen can show the zone."""
+    if not address:
+        return []
+    try:
+        db = sqlite3.connect(DB)
+        rows = db.execute(
+            "SELECT id, lat, lng, rules FROM meters WHERE address=? AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?",
+            (address, lat - 0.002, lat + 0.002, lng - 0.002, lng + 0.002)).fetchall()
+        db.close()
+    except sqlite3.Error:
+        return []
+    out = []
+    for space, mlat, mlng, raw in rows:
+        try:
+            rules = json.loads(raw or "[]")
+        except (TypeError, ValueError):
+            rules = []
+        limit_min = next((r.get("limit_min") for r in rules if r.get("limit_min")), None)
+        rate = next((r.get("rate") for r in rules if r.get("rate")), "")
+        out.append({"space_id": space, "distance_m": int(round(dist(lat, lng, mlat, mlng))),
+                    "time_limit_min": limit_min, "rate": rate})
+    out.sort(key=lambda item: item["distance_m"])
+    return out[:limit]
+
+
+def assemble(lat, lng, now, sign=None, has_permit=False, radius=40, searched=None, permits=None, curb_side=None):
     spot = find_spot(lat, lng, radius)
     saved_permit = permit_covers(spot.get("permit_district"), permits)
     if saved_permit:
@@ -257,6 +291,7 @@ def assemble(lat, lng, now, sign=None, has_permit=False, radius=40, searched=Non
     conflict_notes = sign_conflicts(rules, sign) if sign else []
     if sign:
         rules = apply_sign(rules, sign)
+    rules, side_note = apply_curb_side(rules, curb_side)
     out = answer(rules, now)
     if spot["meter_used"] and spot["distance_m"] and spot["distance_m"] > 25:
         spot["warnings"] = list(spot["warnings"]) + [
@@ -269,6 +304,8 @@ def assemble(lat, lng, now, sign=None, has_permit=False, radius=40, searched=Non
         warnings.append("Nothing in the city data matches this curb. Read the sign, or the block may be outside Los Angeles.")
     if saved_permit and spot.get("permit_district"):
         warnings.append("Your saved permit matches " + spot["permit_district"] + ", so that permit rule is not applied to you.")
+    if side_note:
+        warnings.append(side_note)
     reports = _report_view(alarms.active_reports(lat, lng, now), lat, lng)
     blocks = [r for r in reports if r["kind"] == "temp_no_parking" and r["distance_m"] <= 40]
     if blocks:
@@ -283,8 +320,10 @@ def assemble(lat, lng, now, sign=None, has_permit=False, radius=40, searched=Non
         warnings=warnings, coverage=COVERAGE, rules=[to_dict(r) for r in rules],
         disclaimer=DISCLAIMER, sources=SOURCES, lat=lat, lng=lng,
         checked_at=now.isoformat(), reports=reports,
-        payment=citylinks.payment_options(spot.get("space_id")) if spot.get("meter_used") else None,
-        saved_permit=saved_permit)
+        payment=citylinks.payment_options(spot.get("space_id"), lat=lat, lng=lng) if spot.get("meter_used") or lat else citylinks.payment_options(lat=lat, lng=lng),
+        saved_permit=saved_permit, curb_side=(curb_side or "").strip().lower(),
+        address_side=address_side(spot.get("address")),
+        block=block_spaces(spot.get("address"), lat, lng) if spot.get("meter_used") else [])
     if out.get("hours_known") is False:
         out["confidence"] = "low"
     return out
@@ -382,8 +421,8 @@ def _alarm_at(result, now):
         return datetime.fromisoformat(result["move_by"])
     return None
 
-def park(lat, lng, now, sign=None, has_permit=False, radius=40, sub_id=None, searched=None, device_token=None, settings=None, permits=None):
-    result = assemble(lat, lng, now, sign, has_permit, radius, searched, permits)
+def park(lat, lng, now, sign=None, has_permit=False, radius=40, sub_id=None, searched=None, device_token=None, settings=None, permits=None, curb_side=None):
+    result = assemble(lat, lng, now, sign, has_permit, radius, searched, permits, curb_side)
     when = _alarm_at(result, now)
     snapshot = json.dumps({"rules": result.get("rules"), "warnings": result.get("warnings"),
                            "headline": result.get("headline"), "checked_at": result.get("checked_at")})
@@ -481,7 +520,12 @@ class H(BaseHTTPRequestHandler):
                 return self.reply(400, {"error": "give lat and lng"})
             return self.reply(200, {"spots": legal_nearby(lat, lng, self.when(q.get("at")))})
         if path == "/pay":
-            return self.reply(200, citylinks.payment_options(q.get("space"), q.get("zone")))
+            try:
+                lat = float(q["lat"]) if q.get("lat") else None
+                lng = float(q["lng"]) if q.get("lng") else None
+            except ValueError:
+                lat = lng = None
+            return self.reply(200, citylinks.payment_options(q.get("space"), q.get("zone"), lat, lng))
         if path == "/help":
             return self.reply(200, {"links": citylinks.help_links()})
         if path == "/push/public-key":
@@ -519,7 +563,7 @@ class H(BaseHTTPRequestHandler):
             return self.reply(400, {"error": str(e)})
         now = self.when(q.get("at"))
         permits = [p for p in (q.get("permits") or "").split("|") if p.strip()]
-        self.reply(200, assemble(lat, lng, now, has_permit=q.get("has_permit") == "1", radius=radius, searched=searched, permits=permits))
+        self.reply(200, assemble(lat, lng, now, has_permit=q.get("has_permit") == "1", radius=radius, searched=searched, permits=permits, curb_side=q.get("side")))
 
     def do_POST(self):
         u = urlparse(self.path)
@@ -541,6 +585,8 @@ class H(BaseHTTPRequestHandler):
             return self.sign_body(body)
         if path == "/api/reports":
             return self.report_body(body)
+        if path == "/api/park-detect":
+            return self.detect_body(body)
         confirm = re.fullmatch(r"/api/reports/([a-f0-9]{32})/confirm", path)
         if confirm:
             return self.confirm_body(confirm.group(1), body)
@@ -591,7 +637,7 @@ class H(BaseHTTPRequestHandler):
             lat, lng, searched, radius = self.locate(body)
             now = self.when(body.get("at"))
             out = assemble(lat, lng, now, sign=body.get("sign"), has_permit=bool(body.get("has_permit")),
-                           radius=radius, searched=searched, permits=body.get("permits"))
+                           radius=radius, searched=searched, permits=body.get("permits"), curb_side=body.get("side"))
         except LookupError as e:
             return self.reply(200, {"status": "unknown", "headline": str(e), "answer_word": "Unknown", "can_park": None,
                                     "warnings": [], "gaps": [], "coverage": COVERAGE, "disclaimer": DISCLAIMER})
@@ -608,7 +654,7 @@ class H(BaseHTTPRequestHandler):
                 sub_id = alarms.upsert_sub(body["subscription"])
             out = park(lat, lng, now, sign=body.get("sign"), has_permit=bool(body.get("has_permit")),
                        radius=radius, sub_id=sub_id, searched=searched, settings=body.get("settings"),
-                       permits=body.get("permits"))
+                       permits=body.get("permits"), curb_side=body.get("side"))
             if body.get("scan_id"):
                 out["photos_saved"] = signread.attach_scan(str(body["scan_id"])[:64], out["id"])
         except LookupError as e:
@@ -686,6 +732,22 @@ class H(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 city = []
         self.reply(200, signread.read_sign(images, city))
+
+    def detect_body(self, body):
+        samples = body.get("samples")
+        if not isinstance(samples, list) or len(samples) > 80:
+            return self.reply(400, {"error": "send a short list of samples"})
+        clean = []
+        for item in samples:
+            if not isinstance(item, dict):
+                continue
+            try:
+                speed = item.get("speed")
+                clean.append({"t": float(item["t"]), "lat": float(item["lat"]), "lng": float(item["lng"]),
+                              "speed": None if speed is None else float(speed)})
+            except (KeyError, TypeError, ValueError):
+                continue
+        return self.reply(200, {"prompt": parkdetect.should_prompt(clean)})
 
     def report_body(self, body):
         try:

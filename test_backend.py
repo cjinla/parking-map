@@ -469,6 +469,44 @@ assert meter_spot["facts"]["time_limit"].startswith("2 hours") and meter_spot["m
 assert "$1.00 - $2.50" in meter_spot["facts"]["meter"] and "changes by time of day" in meter_spot["facts"]["meter"]
 assert "Check the sign" in meter_spot["headline"]
 
+# Arrival detection, curb side, sweeping siren, and pay links.
+import parkdetect
+drive = []
+for i, speed in ((0, 9), (8, 8), (16, 7), (24, 0.2), (32, 0), (40, 0)):
+    drive.append({"t": i, "lat": 34.04, "lng": -118.24 - i * 0.00001, "speed": speed})
+assert parkdetect.should_prompt(drive) is True
+assert parkdetect.should_prompt(drive[:3]) is False
+stopped = [{"t": i, "lat": 34.04, "lng": -118.24, "speed": 0} for i in (0, 10, 20, 30)]
+assert parkdetect.should_prompt(stopped) is False
+nospeed = [
+    {"t": 14, "lat": 34.0400, "lng": -118.2400, "speed": None},
+    {"t": 24, "lat": 34.0405, "lng": -118.2400, "speed": None},
+    {"t": 40, "lat": 34.0405, "lng": -118.2400, "speed": None},
+    {"t": 52, "lat": 34.04051, "lng": -118.24001, "speed": None},
+]
+assert parkdetect.should_prompt(nospeed) is True
+from rules import address_side, apply_curb_side
+assert address_side("801 AGATHA ST") == "odd" and address_side("800 AGATHA ST") == "even"
+odd = Rule("no", [0], 60, 240, "odd sweep", topic="sweep", side="odd")
+even = Rule("no", [2], 60, 240, "even sweep", topic="sweep", side="even")
+kept, note = apply_curb_side([odd, even], "odd")
+assert [r.side for r in kept] == ["odd"] and "other side" in note
+plain, unspecified = apply_curb_side([Rule("no", [0], 60, 240, "area", topic="sweep")], "left")
+assert len(plain) == 1 and "does not name" in unspecified
+sided, _warn = server.sweep_from_props({"Posted_Time": "1 am - 4 am", "Day_Short": "Wed", "Odd_Even": "odd", "Route": "Skid Row W"})
+assert sided[0].side == "odd"
+sweep_five = alarms.alert_content("5", "E 7TH ST", "Street sweeping (DT 2)", "abc")
+assert sweep_five["title"] == "Street sweeping in 5 minutes" and sweep_five["level"] == "loud" and sweep_five["urgent"] is True
+meter_five = alarms.alert_content("5", "E 7TH ST", "2-hour meter ends", "abc")
+assert meter_five["title"] == "Move your car in 5 minutes" and meter_five["urgent"] is False
+sweep_plan = alarms.plan_alerts(at("2026-10-21T08:00"), at("2026-10-20T15:00"), "Street sweeping starts")
+assert next(a["level"] for a in sweep_plan if a["kind"] == "5") == "loud"
+pay = citylinks.payment_options("ED832", "17126", 34.038684, -118.243886)
+assert any(item["url"].startswith("sms:77447&body=17126") for item in pay["links"])
+assert any("spothero.com" in item["url"] for item in pay["links"])
+assert any("parkmobile.io/search" in item["url"] for item in pay["links"])
+assert "merchant account" in pay["integration"]
+
 import shutil
 shutil.rmtree(signread.PHOTO_DIR, ignore_errors=True)
 os.remove("test.db")
