@@ -95,6 +95,16 @@ On a metered session, **Pay the meter** lists LADOT’s payment page, ParkMobile
 
 **My permit districts** saves the preferential district on your permit (for example PPD 118). A matching district is not applied to you. **City holidays** lists the year: meters off, or sweeping only.
 
+## Arrival, curb side, and paying
+
+**Watch for when I park** uses location while this page is open. If speed falls from driving to stopped, or the phone barely moves after it was moving, the page asks “Did you just park here?”. Confirming runs the same curb check as the button. iPhone Safari often leaves speed blank, so the page also looks at how far the point moved. Motion sensors need a tap and do not run in the background. A website cannot see CarPlay or Bluetooth, and it cannot keep watching after you lock the phone. The Shortcut in **Set up auto-park** is still the way to save the spot with the phone locked.
+
+Street sweeping sends a louder push 5 minutes before the sweeper, and a siren while the page is open. Pushes repeat until you tap **I moved it**, for the minutes set in Alert times. With the page open, the beep can continue for up to 2 hours.
+
+**Which side did you park on?** keeps odd, even, left, or right. Odd and even sweeping windows in the city data are filtered to that side. Many areas, including downtown DT 2, do not name a side, and the app says so.
+
+**This block** lists the meter spaces on the same block face. The parked screen has hour and minute wheels, like adding time on a meter. **Pay the meter** opens LADOT’s text-to-pay with the zone you typed, ParkMobile’s search, and SpotHero for lots and garages. This app does not charge a card.
+
 ## What the check returns
 
 `GET /check?lat=&lng=` or `POST /check` with a sign. `POST /park` saves the spot and schedules reminders.
